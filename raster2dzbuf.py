@@ -12,7 +12,7 @@ def check(p, j, i):
 def getz(p, j, i):
     q = [j, i, 0]
     pp = np.array([[x[0], x[1], 0] for x in p])
-    w = [np.linalg.norm(np.cross(pp[(i+1) % 3]-q, pp[(i+2) % 3]-q), ord=2)
+    w = [np.linalg.norm(np.cross(pp[(i+1) % 3]-q, pp[(i+2) % 3]-q), ord=1)
          for i in range(3)]
     w /= np.sum(w)
     return np.sum([w[i]*p[i][2] for i in range(3)])

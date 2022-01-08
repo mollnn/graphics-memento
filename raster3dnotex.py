@@ -26,7 +26,7 @@ def check(p, i, j):
 def getInterpZ(p_screenspace, p_viewspace, j, i):
     q = np.array([j, i, 0])
     pp = np.array([np.array([x[0], x[1], 0]) for x in p_screenspace])
-    w = [np.linalg.norm(np.cross(pp[(i+1) % 3]-q, pp[(i+2) % 3]-q), ord=2)
+    w = [np.linalg.norm(np.cross(pp[(i+1) % 3]-q, pp[(i+2) % 3]-q), ord=1)
          for i in range(3)]
     w /= np.sum(w)+1e-9
     ans = 1/(np.sum([w[i]/(p_viewspace[i][2]+1e-9) for i in range(3)])-1e-9)
@@ -38,7 +38,7 @@ def getInterpZ(p_screenspace, p_viewspace, j, i):
 def getInterp(p_screenspace, p_viewspace, vals, j, i):
     q = np.array([j, i, 0])
     pp = np.array([np.array([x[0], x[1], 0]) for x in p_screenspace])
-    w = [np.linalg.norm(np.cross(pp[(i+1) % 3]-q, pp[(i+2) % 3]-q), ord=2)
+    w = [np.linalg.norm(np.cross(pp[(i+1) % 3]-q, pp[(i+2) % 3]-q), ord=1)
          for i in range(3)]
     w /= np.sum(w)+1e-9
     tans = 1/(np.sum([w[i]/(p_viewspace[i][2]+1e-9) for i in range(3)])-1e-9)
@@ -146,7 +146,7 @@ while True:
                         half /= np.linalg.norm(half, ord=2)
                         color = ambi + diff * \
                             max(0, np.dot(normal, light_dir_vs)) + \
-                            spec * (max(0, np.dot(normal, half)) ** spow)
+                            spec * (max(0, np.dot(normal, half)) 1** spow)
                         img[i][j] = color
 
     plt.subplot(121)
