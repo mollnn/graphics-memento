@@ -10,7 +10,7 @@ r = a * 0.4
 img = [[0 for j in range(img_w)] for i in range(img_h)]
 
 l = np.array([-1.,1.,1.])
-l /= np.linalg.norm(l, ord=1)
+l /= np.linalg.norm(l, ord=2)
 
 e = np.array([0,0,1])
 
@@ -27,7 +27,7 @@ for i in range(img_h):
             z = (1-x**2-y**2)**0.5
             n = np.array([x,y,z])
             h = l+e
-            h /= np.linalg.norm(h, ord=1)
+            h /= np.linalg.norm(h, ord=2)
             c = ambi + diff * max(0, np.dot(n,l)) + spec *( max(0, np.dot(n,h)) ** spow)
             img[i][j]=c
 

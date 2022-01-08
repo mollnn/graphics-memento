@@ -5,7 +5,7 @@ vertices = [[0, 0, 0, 1], [1, 0, 0, 1], [-1, 0, 0, 1], [0, 1, 0, 1], [0, 0, -1, 
 
 cam_pos = np.array([-0.2, 0.2, 2, 1])
 gaze_dir = np.array([0.2, -0.2, -1, 0])
-gaze_dir /= np.linalg.norm(gaze_dir, ord=1)
+gaze_dir /= np.linalg.norm(gaze_dir, ord=2)
 up_dir = np.array([0,1,0,0])
 left_dir = np.array(np.cross(gaze_dir[:3], up_dir[:3]).tolist()+[0])
 
