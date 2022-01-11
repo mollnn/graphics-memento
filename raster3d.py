@@ -65,8 +65,8 @@ def getTexValI(tex, x, y):
     return ans
 
 
-img_w = 200
-img_h = 200
+img_w = 512
+img_h = 512
 clip_n, clip_f, clip_l, clip_r, clip_t, clip_b = -3, -10, -1, 1, 1, -1
 
 img = [[np.array([0., 0, 0]) for j in range(img_w)] for i in range(img_h)]
