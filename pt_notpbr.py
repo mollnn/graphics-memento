@@ -4,8 +4,11 @@ from matplotlib import pyplot as plt
 from numpy.linalg import norm
 from copy import deepcopy
 import math
+from tqdm import tqdm
+from numba import jit
 
 
+@jit(nopython=True)
 def checkIntersect(orig, dir, p0, p1, p2):
     o = orig
     d = dir
@@ -23,7 +26,7 @@ def checkIntersect(orig, dir, p0, p1, p2):
 
 
 def getIntersection(orig, dir, tris):
-    ans_t, ans_b1, ans_b2, ans_obj = 2e9, 0, 0, 0
+    ans_t, ans_b1, ans_b2, ans_obj = 2.0e9, 0., 0., 0.
     for tri in tris:
         t, b1, b2 = checkIntersect(orig, dir, tri["p0"], tri["p1"], tri["p2"])
         if t > 0 and t < ans_t and b1 > 0 and b2 > 0 and b1 + b2 < 1:
@@ -41,6 +44,7 @@ def checkVisibility(p, q, tris):
     return t > thres
 
 
+@jit(nopython=True)
 def generateInitialRay(cam_pos, cam_gaze, cam_top, clip_n, clip_r, clip_h, img_w, img_h, img_x, img_y):
     cam_handle = np.cross(cam_gaze, cam_top)
     canonical_x = (img_x + 0.5) / img_w * 2 - 1
@@ -72,7 +76,7 @@ def naiveSampler(normal):
     x = sampleUniformSphere()
     while np.dot(x, normal) < 0:
         x = sampleUniformSphere()
-    pdf = 1. / 2 / math.pi
+    pdf = 1.
     return x, pdf
 
 
@@ -86,10 +90,10 @@ def shade(p, wo, obj, lights, tris):
     # Check if point p can be seen by light
     for light in lights:
         if checkVisibility(p, light["pos"], tris):
-            ans += light["int"] * obj["c"] / norm(p - light["pos"]) ** 2 * abs(
+            ans += light["int"] * obj["c"] / (norm(p - light["pos"]) ** 2) * abs(
                 np.dot(normal, unit(light["pos"] - p)))
     # Bounce more
-    PRR = 0.5
+    PRR = 0.95
     if random.random() < PRR:
         wi, pdf = naiveSampler(normal)
         q_t, q_b1, q_b2, q_obj = getIntersection(p + wi * 1e-8, wi, tris)
@@ -102,38 +106,42 @@ def shade(p, wo, obj, lights, tris):
 
 
 lights = [
-    {"pos": np.array([-0.5, 0.3, 2]), "int": 1.}
+    {"pos": np.array([-0.1, 0.2, -0.6]), "int": 0.1}
 ]
 
 tris = [
-    {"p0": np.array([0, 0, -1]),  "p1": np.array([1, 0, 0]),
-     "p2": np.array([-1, 0, 0]), "c": 0.5},
-    {"p0": np.array([0, 0, -1]),  "p1": np.array([1, 0, 0]),
-     "p2": np.array([0, 1, -1]), "c": 1},
-    {"p0": np.array([0, 0, -1]),  "p1": np.array([-1, 0, 0]),
-     "p2": np.array([0, 1, -1]), "c": 1}
+    {"p0": np.array([0., 0, -1]),  "p1": np.array([1., 0, 0]),
+     "p2": np.array([-1., 0, 0]), "c": 0.4},
+    {"p0": np.array([0., 0, -1]),  "p1": np.array([1., 0, 0]),
+     "p2": np.array([0., 1, -1]), "c": 0.7},
+    {"p0": np.array([0., 0, -1]),  "p1": np.array([-1., 0, 0]),
+     "p2": np.array([0., 1, -1]), "c": 0.7}
 ]
 
-cam_pos = np.array([0, 0.6667, 1.3333])
-cam_gaze = np.array([0, -0.5, -1])
+cam_pos = np.array([0., 0.6667, 1.3333])
+cam_gaze = np.array([0., -0.5, -1])
 cam_gaze /= norm(cam_gaze)
-cam_top = np.array([0, 1, -0.5])
+cam_top = np.array([0., 1, -0.5])
 cam_top /= norm(cam_top)
-clip_n = 1
-clip_r = 1
-clip_h = 1
+clip_n = 1.
+clip_r = 1.
+clip_h = 1.
 img_w = 100
 img_h = 100
+SPP = 16
 
 img = [[0 for i in range(img_w)] for i in range(img_h)]
 
-for i in range(img_h):
+for i in tqdm(range(img_h)):
     for j in range(img_h):
-        orig, dir = generateInitialRay(
-            cam_pos, cam_gaze, cam_top, clip_n, clip_r, clip_h, img_w, img_h, j, i)
-        t, b1, b2, obj = getIntersection(orig, dir, tris)
-        if obj != 0:
-            img[i][j] = shade(orig + t * dir, -dir, obj, lights, tris)
+        for k in range(SPP):
+            orig, dir = generateInitialRay(
+                cam_pos, cam_gaze, cam_top, clip_n, clip_r, clip_h, img_w, img_h, j, i)
+            t, b1, b2, obj = getIntersection(orig, dir, tris)
+            if obj != 0:
+                img[i][j] += shade(orig + t * dir, -dir,
+                                   obj, lights, tris) / SPP
 
-plt.imshow(img, cmap="gray", vmax=1)
+
+plt.imshow(np.sqrt(img), cmap="gray", vmax=1)
 plt.show()
