@@ -72,8 +72,8 @@ def getNormal(tri):
 
 @jit(nopython=True)
 def sampleUniformSphere():
-    r = np.array([random.random() - 0.5, random.random() -
-                 0.5, random.random() - 0.5])
+    r = np.array([random.normalvariate(0, 1), random.normalvariate(
+        0, 1), random.normalvariate(0, 1)])
     r /= norm(r)
     return r
 
@@ -110,9 +110,9 @@ def shade(p, wo, obj, lights, tris):
         if q_obj_id != -1:
             q_obj = tris[q_obj_id]
             q = p + q_t * wi
-            Lo = shade(q, -wi, q_obj, lights, tris)
+            Li = shade(q, -wi, q_obj, lights, tris)
             brdf = obj[3] / math.pi
-            ans += Lo * brdf * max(np.dot(normal, wi), 0.) / pdf / PRR
+            ans += Li * brdf * max(np.dot(normal, wi), 0.) / pdf / PRR
     return ans
 
 
@@ -147,18 +147,12 @@ def main():
     ])
 
     tris = np.array([
-        [[0., 0, -10], [-10., 0, 2],
-         [10., 0, 2], [0.5, 0, 0]],
-        [[0., 1, -100], [100., 1, 100],
-         [-100., 1, 100], [1., 1., 1.]],
-        [[-3., 0, -10], [-3., 10, 0],
-         [-3., 0, 10], [1., 1., 1.]],
-        [[3., 0, 10], [3., 10, 0],
-         [3., 0, -10], [1., 1., 1.]],
-        [[0., 0, -1], [1., 0, 0],
-         [0., 1, -1], [0., 0.5, 0]],
-        [[-1., 0, 0], [0., 0, -1],
-         [0., 1, -1], [0., 0, 0.5]]
+        [[-10, 0, 100], [10, 0, 100], [0, 0, -100], [0.5, 0.5, 0.5]],
+        [[-2, 0, -2], [2, 0, -2], [0, 10, 0], [1.0, 1.0, 1.0]],
+        [[2, 0, 2], [-2, 0, 2], [0, 10, 0], [1.0, 1.0, 1.0]],
+        [[-2, 0, 2], [-2, 0, -2], [0, 10, 0], [1.0, 0, 0]],
+        [[2, 0, -2], [2, 0, 2], [0, 10, 0], [0, 0, 1.0]],
+        [[0, 0, -2], [0, 0, 0], [0, 1, -2], [1.0, 1.0, 1.0]]
     ])
 
     cam_pos = np.array([0., 0.6667, 1.3333])
@@ -166,12 +160,12 @@ def main():
     cam_gaze /= norm(cam_gaze)
     cam_top = np.array([0., 1, -0.5])
     cam_top /= norm(cam_top)
-    clip_n = 1.
-    clip_r = 1.
-    clip_h = 1.
+    clip_n = 0.1
+    clip_r = 0.1
+    clip_h = 0.1
     img_w = 128
     img_h = 128
-    SPP = 16
+    SPP = 64
 
     img = render(tris, lights, cam_pos, cam_gaze, cam_top,
                  clip_n, clip_r, clip_h, img_w, img_h, SPP)
