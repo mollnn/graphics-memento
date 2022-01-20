@@ -165,7 +165,7 @@ def main():
     clip_h = 0.1
     img_w = 128
     img_h = 128
-    SPP = 64
+    SPP = 1
 
     img = render(tris, lights, cam_pos, cam_gaze, cam_top,
                  clip_n, clip_r, clip_h, img_w, img_h, SPP)
