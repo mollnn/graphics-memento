@@ -3,21 +3,39 @@ import taichi as ti
 from time import time as tm
 import time
 from numpy.linalg import norm
-from readobj import readobj
 
-ti.init(arch=ti.cuda, debug=True)
+
+def readobj(filename):
+    fp = open(filename, 'r')
+    fl = fp.readlines()
+    verts = [[]]
+    ans = []
+    for s in fl:
+        a = s.split()
+        if len(a)>0:
+            if a[0]=='v':
+                verts.append([float(a[1]), float(a[2]), float(a[3])])
+            elif a[0]=='f':
+                b = a[1:]
+                b = [i.split('/') for i in b]
+                ans.append([verts[int(b[0][0])], verts[int(b[1][0])], verts[int(b[2][0])]])
+    return ans
+
+
+
+ti.init(arch=ti.cuda, debug=False)
 
 scene = []
-scene += readobj('../assets/bunny.obj')
-scene += readobj('../assets/test.obj')
+scene += readobj('assets/bunny.obj')
+scene += readobj('assets/test.obj')
 md = np.array(scene)
 
 NT = len(md)
 NH = NW = 256
 CN = CR = CH = 0.01
 
-tris = ti.Vector.field(3, ti.f32, (NT, 3))
-tris_n = ti.Vector.field(3, ti.f32, (NT))
+mesh_vertices = ti.Vector.field(3, ti.f32, (NT, 3))
+mesh_attributes = ti.Vector.field(3, ti.f32, (NT))
 img = ti.Vector.field(3, ti.f32, (NH, NW))
 cam_pos = ti.Vector.field(3, ti.f32, ())
 cam_gaze = ti.Vector.field(3, ti.f32, ())
@@ -31,12 +49,12 @@ light_pos = ti.Vector.field(3, ti.f32, ())
 light_int = ti.Vector.field(3, ti.f32, ())
 
 
-tris.from_numpy(md)
+mesh_vertices.from_numpy(md)
 nm = [np.cross(p[1]-p[0], p[2]-p[0]) for p in md]
-tris_n.from_numpy(np.array([
+mesh_attributes.from_numpy(np.array([
     i/norm(i) for i in nm
 ]))
-cam_pos .from_numpy(np.array([0., 0.1, 0.2]))
+cam_pos .from_numpy(np.array([0., 0.1, 0.15]))
 cam_gaze .from_numpy(np.array([0., 0., -1]))
 cam_top .from_numpy(np.array([0., 1, 0]))
 clip_n .from_numpy(np.array(CN))
@@ -53,9 +71,9 @@ light_int.from_numpy(np.array([10., 10., 10.]))
 def checkIntersect(orig, dir, trid):
     o = orig
     d = dir
-    e1 = tris[trid, 1] - tris[trid, 0]
-    e2 = tris[trid, 2] - tris[trid, 0]
-    s = o - tris[trid, 0]
+    e1 = mesh_vertices[trid, 1] - mesh_vertices[trid, 0]
+    e2 = mesh_vertices[trid, 2] - mesh_vertices[trid, 0]
+    s = o - mesh_vertices[trid, 0]
     s1 = d.cross(e2)
     s2 = s.cross(e1)
     t = s2.dot(e2)
@@ -69,7 +87,7 @@ def checkIntersect(orig, dir, trid):
 def getIntersection(orig, dir):
     # Find nearest intersection of ray(orig,dir) and triangles
     ans_t, ans_b1, ans_b2, ans_obj_id = 2e9, 0., 0., -1
-    for i in range(tris.shape[0]):
+    for i in range(mesh_vertices.shape[0]):
         t, b1, b2 = checkIntersect(orig, dir, i)
         if t > 0 and t < ans_t and b1 > 0 and b2 > 0 and b1 + b2 < 1:
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
@@ -108,28 +126,34 @@ def sample_brdf(normal):
     costt, sintt = ti.cos(theta), ti.sin(theta)
     xy = (u * costt + v * sintt) * r
     zlen = ti.sqrt(max(0.0, 1.0 - xy.dot(xy)))
-    return xy + zlen * normal
+    ans = xy + zlen * normal
+    return ans.normalized()
 
 
 @ti.kernel
 def render():
+    SPP = 1
     for x, y in img:
-        orig, dir = generateInitialRay(x, y)
-        NB = 3
-        ans = ti.Vector([0., 0., 0.], dt=ti.f32)
-        coef = ti.Vector([1., 1., 1.], dt=ti.f32)
-        for _ in range(NB):
-            t, b1, b2, tid = getIntersection(orig, dir)
-            p = orig + dir * t
-            if tid != -1:
-                brdf = ti.Vector([0.7, 0.7, 0.7], dt=ti.f32)
-                ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
-                    tris_n[tid].dot((light_pos[None]-p).normalized()), 0.) * coef
-                wi = sample_brdf(tris_n[tid])
-                coef *= brdf
-                orig = p + wi * 1e-6
-                dir = wi
-        img[x, y] = ans
+        tans = ti.Vector([0., 0., 0.], dt=ti.f32)
+        for sp in range(SPP):
+            orig, dir = generateInitialRay(x, y)
+            NB = 3
+            ans = ti.Vector([0., 0., 0.], dt=ti.f32)
+            coef = ti.Vector([1., 1., 1.], dt=ti.f32)
+            for _ in range(NB):
+                t, b1, b2, tid = getIntersection(orig, dir)
+                p = orig + dir * t
+                if tid != -1 and mesh_attributes[tid].dot(-dir) > 0:
+                    brdf = ti.Vector([0.7, 0.7, 0.7], dt=ti.f32)
+                    ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
+                        mesh_attributes[tid].dot((light_pos[None]-p).normalized()), 0.) * coef
+                    wi = sample_brdf(mesh_attributes[tid])
+                    coef *= brdf * max(mesh_attributes[tid].dot(wi), 0.)
+                    orig = p + wi * 1e-6
+                    dir = wi
+            tans += ans
+        img[x, y] = tans / SPP
+
 
 
 gui = ti.GUI(res=(NW, NH))
@@ -138,13 +162,13 @@ while True:
     stt = tm()
 
     cam_pos .from_numpy(
-        np.array([0.2*ti.cos(frame_id * 0.01), 0.1, 0.2*ti.sin(frame_id * 0.01)]))
+        np.array([0.3*ti.cos(frame_id * 0.02), 0.1, 0.3*ti.sin(frame_id * 0.02)]))
     cam_gaze.from_numpy(
-        np.array([0.2*ti.cos(frame_id * 0.01), 0.0, 0.2*ti.sin(frame_id * 0.01)]))
+        np.array([0.3*ti.cos(frame_id * 0.02), 0.0, 0.3*ti.sin(frame_id * 0.02)]))
     cam_gaze[None] = -cam_gaze[None].normalized()
 
     render()
-    if frame_id % 50 == 0:
+    if frame_id % 10 == 0:
         print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9))
     gui.set_image(img)
     gui.show()
