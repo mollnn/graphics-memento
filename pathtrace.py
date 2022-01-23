@@ -63,7 +63,7 @@ clip_h .from_numpy(np.array(CH))
 img_w .from_numpy(np.array(NW))
 img_h .from_numpy(np.array(NH))
 img.from_numpy(np.zeros((NH, NW, 3)))
-light_pos.from_numpy(np.array([0., 2, 8]))
+light_pos.from_numpy(np.array([0., 2, 7]))
 light_int.from_numpy(np.array([100., 100., 100.]))
 
 
@@ -134,7 +134,7 @@ def sample_brdf(normal):
 
 @ti.kernel
 def render():
-    SPP = 64
+    SPP = 8
     for x, y in img:
         tans = ti.Vector([0., 0., 0.], dt=ti.f32)
         for sp in range(SPP):
@@ -154,20 +154,30 @@ def render():
                     coef *= brdf * 3.14159
                     orig = p + wi * 1e-6
                     dir = wi
+                else: break
             tans += ans
         img[x, y] = tans / SPP
 
 
 gui = ti.GUI(res=(NW, NH))
 frame_id = 0
+
+ina_r = 3.0
+ina_h = 1.0
+
 while True:
     stt = tm()
+    if gui.get_event(ti.GUI.PRESS):
+        if gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]: break
+    if gui.is_pressed(ti.GUI.LEFT, 'a'): ina_r-=0.01
+    if gui.is_pressed(ti.GUI.RIGHT, 'd'): ina_r+=0.01
+    if gui.is_pressed(ti.GUI.UP, 'w'): ina_h+=0.01
+    if gui.is_pressed(ti.GUI.DOWN, 's'): ina_h-=0.01
 
     cam_pos .from_numpy(
-        np.array([3*ti.cos(frame_id * 0.02), 1.0, 3*ti.sin(frame_id * 0.02)]))
-    cam_gaze.from_numpy(
-        np.array([3*ti.cos(frame_id * 0.02), 0.0, 3*ti.sin(frame_id * 0.02)]))
-    cam_gaze[None] = -cam_gaze[None].normalized()
+        np.array([ina_r*ti.cos(frame_id * 0.02), ina_h, ina_r*ti.sin(frame_id * 0.02)]))
+    cam_gaze[None] = -cam_pos[None]
+    cam_gaze[None] = cam_gaze[None].normalized()
 
     render()
     gui.set_image(img)
