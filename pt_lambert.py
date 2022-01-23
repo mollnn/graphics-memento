@@ -97,6 +97,7 @@ def shade(p, wo, obj, lights, tris):
     ans = np.array([0., 0, 0])
     normal = getNormal(obj)
     # Check if point p can be seen by light
+    # TODO: Require back culling here
     for light in lights:
         if checkVisibility(p, light[0], tris):
             brdf = obj[3] / math.pi

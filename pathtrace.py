@@ -5,32 +5,32 @@ import time
 from numpy.linalg import norm
 
 
-def readobj(filename):
+def readObject(filename):
     fp = open(filename, 'r')
     fl = fp.readlines()
     verts = [[]]
     ans = []
     for s in fl:
         a = s.split()
-        if len(a)>0:
-            if a[0]=='v':
+        if len(a) > 0:
+            if a[0] == 'v':
                 verts.append([float(a[1]), float(a[2]), float(a[3])])
-            elif a[0]=='f':
+            elif a[0] == 'f':
                 b = a[1:]
                 b = [i.split('/') for i in b]
-                ans.append([verts[int(b[0][0])], verts[int(b[1][0])], verts[int(b[2][0])]])
+                ans.append(
+                    [verts[int(b[0][0])], verts[int(b[1][0])], verts[int(b[2][0])]])
     return ans
-
 
 
 ti.init(arch=ti.cuda, debug=False)
 
 scene = []
-scene += readobj('assets/bunny.obj')
-scene += readobj('assets/test.obj')
-md = np.array(scene)
+scene += readObject('assets/rock.obj')
+scene += readObject('assets/test.obj')
+mesh_desc = np.array(scene)
 
-NT = len(md)
+NT = len(mesh_desc)
 NH = NW = 256
 CN = CR = CH = 0.01
 
@@ -49,10 +49,10 @@ light_pos = ti.Vector.field(3, ti.f32, ())
 light_int = ti.Vector.field(3, ti.f32, ())
 
 
-mesh_vertices.from_numpy(md)
-nm = [np.cross(p[1]-p[0], p[2]-p[0]) for p in md]
+mesh_vertices.from_numpy(mesh_desc)
+mesh_desc_normals = [np.cross(p[1]-p[0], p[2]-p[0]) for p in mesh_desc]
 mesh_attributes.from_numpy(np.array([
-    i/norm(i) for i in nm
+    i/norm(i) for i in mesh_desc_normals
 ]))
 cam_pos .from_numpy(np.array([0., 0.1, 0.15]))
 cam_gaze .from_numpy(np.array([0., 0., -1]))
@@ -63,8 +63,8 @@ clip_h .from_numpy(np.array(CH))
 img_w .from_numpy(np.array(NW))
 img_h .from_numpy(np.array(NH))
 img.from_numpy(np.zeros((NH, NW, 3)))
-light_pos.from_numpy(np.array([0., 1, 3]))
-light_int.from_numpy(np.array([10., 10., 10.]))
+light_pos.from_numpy(np.array([0., 2, 8]))
+light_int.from_numpy(np.array([100., 100., 100.]))
 
 
 @ti.func
@@ -93,6 +93,14 @@ def getIntersection(orig, dir):
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
     return ans_t, ans_b1, ans_b2, ans_obj_id
 
+@ti.func
+def checkVisibility(p, q):
+    d = (q-p).normalized()
+    p1 = p + d * 1e-5
+    thres = (q-p).norm() - 1e-4
+    t, b1, b2, obj = getIntersection(p1, d)
+    return t>thres
+
 
 @ti.func
 def generateInitialRay(img_x, img_y):
@@ -109,30 +117,24 @@ def generateInitialRay(img_x, img_y):
 
 @ti.func
 def sample_brdf(normal):
-    r, theta = 0.0, 0.0
-    sx = ti.random() * 2.0 - 1.0
-    sy = ti.random() * 2.0 - 1.0
-    if sx != 0 or sy != 0:
-        if abs(sx) > abs(sy):
-            r = sx
-            theta = np.pi / 4 * (sy / sx)
-        else:
-            r = sy
-            theta = np.pi / 4 * (2 - sx / sy)
-    u = ti.Vector([1.0, 0.0, 0.0])
-    if abs(normal[1]) < 1 - 1e-7:
-        u = normal.cross(ti.Vector([0.0, 1.0, 0.0]))
-    v = normal.cross(u)
-    costt, sintt = ti.cos(theta), ti.sin(theta)
-    xy = (u * costt + v * sintt) * r
-    zlen = ti.sqrt(max(0.0, 1.0 - xy.dot(xy)))
-    ans = xy + zlen * normal
-    return ans.normalized()
+    t = ti.Vector([1, 2, 3], dt=ti.f32)
+    ex = t.cross(normal).normalized()
+    ey = ex.cross(normal).normalized()
+    ez = normal
+    r1 = ti.random()
+    r2 = ti.random()
+    r = ti.sqrt(r1)
+    a = 2*3.14159*r2
+    x = r*ti.cos(a)
+    y = r*ti.sin(a)
+    z = ti.sqrt(1-r1)
+    w = x*ex + y*ey + z*ez
+    return w.normalized()
 
 
 @ti.kernel
 def render():
-    SPP = 1
+    SPP = 64
     for x, y in img:
         tans = ti.Vector([0., 0., 0.], dt=ti.f32)
         for sp in range(SPP):
@@ -144,16 +146,16 @@ def render():
                 t, b1, b2, tid = getIntersection(orig, dir)
                 p = orig + dir * t
                 if tid != -1 and mesh_attributes[tid].dot(-dir) > 0:
-                    brdf = ti.Vector([0.7, 0.7, 0.7], dt=ti.f32)
-                    ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
-                        mesh_attributes[tid].dot((light_pos[None]-p).normalized()), 0.) * coef
+                    brdf = ti.Vector([0.3, 0.3, 0.3], dt=ti.f32)
+                    if checkVisibility(p, light_pos[None]):
+                        ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
+                            mesh_attributes[tid].dot((light_pos[None]-p).normalized()), 0.) * coef
                     wi = sample_brdf(mesh_attributes[tid])
-                    coef *= brdf * max(mesh_attributes[tid].dot(wi), 0.)
+                    coef *= brdf * 3.14159
                     orig = p + wi * 1e-6
                     dir = wi
             tans += ans
         img[x, y] = tans / SPP
-
 
 
 gui = ti.GUI(res=(NW, NH))
@@ -162,14 +164,14 @@ while True:
     stt = tm()
 
     cam_pos .from_numpy(
-        np.array([0.3*ti.cos(frame_id * 0.02), 0.1, 0.3*ti.sin(frame_id * 0.02)]))
+        np.array([3*ti.cos(frame_id * 0.02), 1.0, 3*ti.sin(frame_id * 0.02)]))
     cam_gaze.from_numpy(
-        np.array([0.3*ti.cos(frame_id * 0.02), 0.0, 0.3*ti.sin(frame_id * 0.02)]))
+        np.array([3*ti.cos(frame_id * 0.02), 0.0, 3*ti.sin(frame_id * 0.02)]))
     cam_gaze[None] = -cam_gaze[None].normalized()
 
     render()
-    if frame_id % 10 == 0:
-        print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9))
     gui.set_image(img)
     gui.show()
+    if frame_id % 10 == 0:
+        print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9))
     frame_id += 1
