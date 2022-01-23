@@ -5,7 +5,7 @@ import time
 from numpy.linalg import norm
 
 
-def readObject(filename):
+def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
     fp = open(filename, 'r')
     fl = fp.readlines()
     verts = [[]]
@@ -14,28 +14,36 @@ def readObject(filename):
         a = s.split()
         if len(a) > 0:
             if a[0] == 'v':
-                verts.append([float(a[1]), float(a[2]), float(a[3])])
+                verts.append(np.array([float(a[1]), float(a[2]), float(a[3])]))
             elif a[0] == 'f':
                 b = a[1:]
                 b = [i.split('/') for i in b]
                 ans.append(
-                    [verts[int(b[0][0])], verts[int(b[1][0])], verts[int(b[2][0])]])
+                    [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset, material_id])
     return ans
 
 
 ti.init(arch=ti.cuda, debug=False)
 
 scene = []
-scene += readObject('assets/rock.obj')
-scene += readObject('assets/test.obj')
+scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
+scene += readObject('assets/cube.obj', 1, offset=[-20, 0, 0], scale=10)
+scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
+scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
+scene += readObject('assets/cube.obj', 0, offset=[0, 14.99, 0], scale=5)
+scene += readObject('assets/cube.obj', 1, offset=[20, 0, 0], scale=10)
+scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
+scene_material_id = [i[3] for i in scene]
+scene = [i[:3] for i in scene]
 mesh_desc = np.array(scene)
+mesh_material_desc = np.array(scene_material_id)
 
 NT = len(mesh_desc)
 NH = NW = 256
 CN = CR = CH = 0.01
 
 mesh_vertices = ti.Vector.field(3, ti.f32, (NT, 3))
-mesh_attributes = ti.Vector.field(3, ti.f32, (NT))
+mesh_material_id = ti.field(ti.i32, (NT))
 img = ti.Vector.field(3, ti.f32, (NH, NW))
 cam_pos = ti.Vector.field(3, ti.f32, ())
 cam_gaze = ti.Vector.field(3, ti.f32, ())
@@ -50,10 +58,7 @@ light_int = ti.Vector.field(3, ti.f32, ())
 
 
 mesh_vertices.from_numpy(mesh_desc)
-mesh_desc_normals = [np.cross(p[1]-p[0], p[2]-p[0]) for p in mesh_desc]
-mesh_attributes.from_numpy(np.array([
-    i/norm(i) for i in mesh_desc_normals
-]))
+mesh_material_id.from_numpy(mesh_material_desc)
 cam_pos .from_numpy(np.array([0., 0.1, 0.15]))
 cam_gaze .from_numpy(np.array([0., 0., -1]))
 cam_top .from_numpy(np.array([0., 1, 0]))
@@ -93,13 +98,14 @@ def getIntersection(orig, dir):
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
     return ans_t, ans_b1, ans_b2, ans_obj_id
 
+
 @ti.func
 def checkVisibility(p, q):
     d = (q-p).normalized()
     p1 = p + d * 1e-5
     thres = (q-p).norm() - 1e-4
     t, b1, b2, obj = getIntersection(p1, d)
-    return t>thres
+    return t > thres
 
 
 @ti.func
@@ -134,27 +140,54 @@ def sample_brdf(normal):
 
 @ti.kernel
 def render():
-    SPP = 8
+    SPP = 32
     for x, y in img:
         tans = ti.Vector([0., 0., 0.], dt=ti.f32)
         for sp in range(SPP):
             orig, dir = generateInitialRay(x, y)
-            NB = 3
+            NB = 5
             ans = ti.Vector([0., 0., 0.], dt=ti.f32)
             coef = ti.Vector([1., 1., 1.], dt=ti.f32)
             for _ in range(NB):
                 t, b1, b2, tid = getIntersection(orig, dir)
                 p = orig + dir * t
-                if tid != -1 and mesh_attributes[tid].dot(-dir) > 0:
-                    brdf = ti.Vector([0.3, 0.3, 0.3], dt=ti.f32)
-                    if checkVisibility(p, light_pos[None]):
-                        ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
-                            mesh_attributes[tid].dot((light_pos[None]-p).normalized()), 0.) * coef
-                    wi = sample_brdf(mesh_attributes[tid])
-                    coef *= brdf * 3.14159
-                    orig = p + wi * 1e-6
-                    dir = wi
-                else: break
+                p0 = mesh_vertices[tid, 0]
+                p1 = mesh_vertices[tid, 1]
+                p2 = mesh_vertices[tid, 2]
+                mid = mesh_material_id[tid]
+                normal = (p1-p0).cross(p2-p0).normalized()
+
+                if tid != -1 and normal.dot(-dir) > 0:
+                    # Implement different materials here
+                    if mid == 0:
+                        # Area light
+                        ans += 3 * ti.Vector([1., 0.6, 0.3]) * coef 
+                        break
+                    elif mid == 1:
+                        # Pure lambert
+                        brdf = ti.Vector([0.2, 0.2, 0.2], dt=ti.f32)
+                        if checkVisibility(p, light_pos[None]):
+                            ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
+                                normal.dot((light_pos[None]-p).normalized()), 0.) * coef
+                        wi = sample_brdf(normal)
+                        coef *= brdf * 3.14159
+                        orig = p + wi * 1e-5
+                        dir = wi
+                    elif mid == 2:
+                        # Pure specular
+                        brdf = ti.Vector([0.6, 0.7, 0.8], dt=ti.f32)
+                        # if checkVisibility(p, light_pos[None]):
+                        #     ans += light_int[None] * brdf / (p - light_pos[None]).norm() ** 2 * max(
+                        #         normal.dot((light_pos[None]-p).normalized()), 0.) * coef
+                        theta = normal.dot(-dir)
+                        wi = 2*ti.cos(theta)*normal+dir
+                        wi = wi.normalized()
+                        coef *= brdf 
+                        orig = p + wi * 1e-5
+                        dir = wi
+
+                else:
+                    break
             tans += ans
         img[x, y] = tans / SPP
 
@@ -168,11 +201,16 @@ ina_h = 1.0
 while True:
     stt = tm()
     if gui.get_event(ti.GUI.PRESS):
-        if gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]: break
-    if gui.is_pressed(ti.GUI.LEFT, 'a'): ina_r-=0.01
-    if gui.is_pressed(ti.GUI.RIGHT, 'd'): ina_r+=0.01
-    if gui.is_pressed(ti.GUI.UP, 'w'): ina_h+=0.01
-    if gui.is_pressed(ti.GUI.DOWN, 's'): ina_h-=0.01
+        if gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]:
+            break
+    if gui.is_pressed(ti.GUI.LEFT, 'a'):
+        ina_r -= 0.01
+    if gui.is_pressed(ti.GUI.RIGHT, 'd'):
+        ina_r += 0.01
+    if gui.is_pressed(ti.GUI.UP, 'w'):
+        ina_h += 0.01
+    if gui.is_pressed(ti.GUI.DOWN, 's'):
+        ina_h -= 0.01
 
     cam_pos .from_numpy(
         np.array([ina_r*ti.cos(frame_id * 0.02), ina_h, ina_r*ti.sin(frame_id * 0.02)]))
