@@ -47,7 +47,7 @@ mesh_material_desc = np.array(scene_material_id)
 matattrs_np = np.array(matattrs, dtype=np.float32)
 
 N_TRIANGLES = len(mesh_desc)
-IMG_HEIGHT = IMG_WEIGHT = 256
+IMG_HEIGHT = IMG_WEIGHT = 512
 CLIP_N = CLIP_R = CLIP_H = 0.1
 N_MATERIALS = 100
 
@@ -135,7 +135,9 @@ def generateInitialRay(img_x, img_y):
 
 @ti.func
 def sample_brdf(normal):
-    t = ti.Vector([1, 2, 3], dt=ti.f32)
+    t = ti.Vector([0, 0, 1], dt=ti.f32)
+    if normal.dot(t) > 0.9:
+        t = ti.Vector([0, 1, 0], dt=ti.f32)
     ex = t.cross(normal).normalized()
     ey = ex.cross(normal).normalized()
     ez = normal
@@ -152,7 +154,7 @@ def sample_brdf(normal):
 
 @ti.kernel
 def render():
-    SPP = 32
+    SPP = 128
     for x, y in img:
         tans = ti.Vector([0., 0., 0.], dt=ti.f32)
         for sp in range(SPP):
@@ -189,8 +191,7 @@ def render():
                     elif material_type_id == 2:
                         # Pure specular
                         brdf = material_attributes[material_id, 1]
-                        theta = normal.dot(-dir)
-                        wi = 2*ti.cos(theta)*normal+dir
+                        wi = 2*normal.dot(-dir)*normal+dir
                         wi = wi.normalized()
                         coef *= brdf
                         orig = hit_pos + wi * 1e-4
@@ -199,11 +200,11 @@ def render():
                 else:
                     break
             tans += ans
-        img[x, y] = ti.pow(tans / SPP, 2.2)
+        img[x, y] = ti.pow(tans / SPP, 2.2) * 1.5
 
 
 gui = ti.GUI(res=(IMG_WEIGHT, IMG_HEIGHT))
-frame_id = 0
+frame_id = 500
 
 ina_r = 3.0
 ina_h = 1.0
@@ -232,4 +233,4 @@ while True:
     gui.show()
     if frame_id % 10 == 0:
         print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9))
-    frame_id += 1
+    frame_id += 10
