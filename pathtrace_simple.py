@@ -1,10 +1,6 @@
-# Path Trace (full version)
-#   always sample brdf, bvh, microfacet, texture
-# TODO: bvh
-# TODO: microfacet
-# TODO: texture
+# Path Trace (simple version)
+#   always sample brdf, only use .obj for mesh, no bvh, 3 material types
 
-from matplotlib.lines import Line2D
 import numpy as np
 import taichi as ti
 from time import time as tm
@@ -40,7 +36,6 @@ scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
 scene += readObject('assets/cube.obj', 0, offset=[0, 14.9, 0], scale=5)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-scene += readObject('assets/rock.obj', 5, offset=[0, 0, 0], scale=0.5)
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
@@ -48,8 +43,7 @@ matattrs = [
     [[1, 0, 0], [0.3, 0.3, 0.3], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
     [[1, 0, 0], [0.3, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.0, 0.3, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.12, 0.09, 0.05], [0, 0, 0], [0, 0, 0]]
+    [[1, 0, 0], [0.0, 0.3, 0.0], [0, 0, 0], [0, 0, 0]]
 ]
 mesh_desc = np.array(scene)
 mesh_material_desc = np.array(scene_material_id)
@@ -73,6 +67,8 @@ clip_r = ti.field(ti.f32, ())
 clip_h = ti.field(ti.f32, ())
 img_w = ti.field(ti.f32, ())
 img_h = ti.field(ti.f32, ())
+light_pos = ti.Vector.field(3, ti.f32, ())
+light_int = ti.Vector.field(3, ti.f32, ())
 
 
 mesh_vertices.from_numpy(mesh_desc)
@@ -87,6 +83,8 @@ clip_h .from_numpy(np.array(CLIP_H))
 img_w .from_numpy(np.array(IMG_WEIGHT))
 img_h .from_numpy(np.array(IMG_HEIGHT))
 img.from_numpy(np.zeros((IMG_HEIGHT, IMG_WEIGHT, 3)))
+light_pos.from_numpy(np.array([0., 2, 7]))
+light_int.from_numpy(np.array([100., 100., 100.]))
 
 
 @ti.func
@@ -108,13 +106,21 @@ def checkIntersect(orig, dir, trid):
 @ti.func
 def getIntersection(orig, dir):
     # Find nearest intersection of ray(orig,dir) and triangles
-    # TODO: BVH Support
     ans_t, ans_b1, ans_b2, ans_obj_id = 2e9, 0., 0., -1
     for i in range(mesh_vertices.shape[0]):
         t, b1, b2 = checkIntersect(orig, dir, i)
         if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
     return ans_t, ans_b1, ans_b2, ans_obj_id
+
+
+# @ti.func
+# def checkVisibility(p, q):
+#     d = (q-p).normalized()
+#     p1 = p + d * 1e-4
+#     thres = (q-p).norm() - 1e-4
+#     t, b1, b2, obj = getIntersection(p1, d)
+#     return t > thres
 
 
 @ti.func
@@ -151,12 +157,12 @@ def sample_brdf(normal):
 
 @ti.kernel
 def render():
-    SPP = 32
+    SPP = 64
     for x, y in img:
         tans = ti.Vector([0., 0., 0.], dt=ti.f32)
         for sp in range(SPP):
             orig, dir = generateInitialRay(x, y)
-            N_BOUNCE = 8    # RR will cause warp divergence
+            N_BOUNCE = 4    # RR will cause warp divergence
             ans = ti.Vector([0., 0., 0.], dt=ti.f32)
             coef = ti.Vector([1., 1., 1.], dt=ti.f32)
             for _ in range(N_BOUNCE):
@@ -178,6 +184,9 @@ def render():
                     elif material_type_id == 1:
                         # Pure lambert
                         brdf = material_attributes[material_id, 1]
+                        # if checkVisibility(hit_pos, light_pos[None]):
+                        #     ans += light_int[None] * brdf / (hit_pos - light_pos[None]).norm() ** 2 * max(
+                        #         normal.dot((light_pos[None]-hit_pos).normalized()), 0.) * coef
                         wi = sample_brdf(normal)
                         coef *= brdf * 3.14159
                         orig = hit_pos + wi * 1e-4
