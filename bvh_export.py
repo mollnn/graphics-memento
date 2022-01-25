@@ -1,28 +1,29 @@
 import enum
 import numpy as np
-from pygame import key
 import random
-
 import taichi as ti
 
-def vec3(x, y, z):
+###################################################
+# BVH Builder
+###################################################
+
+
+def bvh_vec3(x, y, z):
     return np.array([x, y, z], dtype=np.float32)
 
-def rvec3():
-    return vec3(random.random(), random.random(), random.random())
 
-def rvec2():
-    return vec3(random.random(), random.random(), 0)
+def bvh_rvec3():
+    return bvh_vec3(random.random(), random.random(), random.random())
 
 
 def getAABB(tid, triangle):
     return {
-        "p0": vec3(
+        "p0": bvh_vec3(
             min(triangle["p0"][0], triangle["p1"][0], triangle["p2"][0]),
             min(triangle["p0"][1], triangle["p1"][1], triangle["p2"][1]),
             min(triangle["p0"][2], triangle["p1"][2], triangle["p2"][2])
         ),
-        "p1": vec3(
+        "p1": bvh_vec3(
             max(triangle["p0"][0], triangle["p1"][0], triangle["p2"][0]),
             max(triangle["p0"][1], triangle["p1"][1], triangle["p2"][1]),
             max(triangle["p0"][2], triangle["p1"][2], triangle["p2"][2])
@@ -36,12 +37,12 @@ def getAABB(tid, triangle):
 
 def mergeAABB_nonleaf(aabb1, aabb2):
     return {
-        "p0": vec3(
+        "p0": bvh_vec3(
             min(aabb1["p0"][0], aabb2["p0"][0]),
             min(aabb1["p0"][1], aabb2["p0"][1]),
             min(aabb1["p0"][2], aabb2["p0"][2])
         ),
-        "p1": vec3(
+        "p1": bvh_vec3(
             max(aabb1["p1"][0], aabb2["p1"][0]),
             max(aabb1["p1"][1], aabb2["p1"][1]),
             max(aabb1["p1"][2], aabb2["p1"][2])
@@ -55,12 +56,12 @@ def mergeAABB_nonleaf(aabb1, aabb2):
 
 def mergeAABB(aabb1, aabb2):
     return {
-        "p0": vec3(
+        "p0": bvh_vec3(
             min(aabb1["p0"][0], aabb2["p0"][0]),
             min(aabb1["p0"][1], aabb2["p0"][1]),
             min(aabb1["p0"][2], aabb2["p0"][2])
         ),
-        "p1": vec3(
+        "p1": bvh_vec3(
             max(aabb1["p1"][0], aabb2["p1"][0]),
             max(aabb1["p1"][1], aabb2["p1"][1]),
             max(aabb1["p1"][2], aabb2["p1"][2])
@@ -83,7 +84,7 @@ def getAABBs(tidlist, triangles):
     return mergeAABBs([getAABB(tid, triangles[tid]) for tid in tidlist])
 
 
-def divide(objs, axis, triangles):
+def divideTriangles(objs, axis, triangles):
     keys = []
     for tid in objs:
         tmp_aabb = getAABB(tid, triangles[tid])
@@ -95,15 +96,15 @@ def divide(objs, axis, triangles):
     return [i[1] for i in lefts], [i[1] for i in rights]
 
 
-def solve(bvh, p, objs, triangles):
-    if len(objs)>2:
-        tl, tr = divide(objs, random.randint(0,1), triangles)    # MUST MODITY 1 TO 2 WHEN USED IN 3D
+def buildBVH_recursive(bvh, p, objs, triangles):
+    if len(objs) > 2:
+        tl, tr = divideTriangles(objs, random.randint(0, 2), triangles)
         pl = len(bvh)
         bvh.append({})
         pr = len(bvh)
         bvh.append({})
-        solve(bvh, pl, tl, triangles)
-        solve(bvh, pr, tr, triangles)
+        buildBVH_recursive(bvh, pl, tl, triangles)
+        buildBVH_recursive(bvh, pr, tr, triangles)
         bvh[p] = mergeAABB_nonleaf(bvh[pl], bvh[pr])
         bvh[p]["chl"] = pl
         bvh[p]["chr"] = pr
@@ -111,45 +112,42 @@ def solve(bvh, p, objs, triangles):
         bvh[p] = getAABBs(objs, triangles)
 
 
+def buildBVH(meshs):
+    triangles = [
+        {"p0": i[0], "p1":i[1], "p2":i[2]} for i in meshs
+    ]
+
+    bvh = [{}]
+    buildBVH_recursive(bvh, 0, [i for i in range(len(triangles))], triangles)
+
+    res_v = []
+    res_d = []
+    for i in bvh:
+        res_v.append([i["p0"], i["p1"]])
+
+    for i in bvh:
+        if i["leaf"]:
+            res_d.append([1]+i["triangles"]+[-1]*(3-len(i["triangles"])-1))
+        else:
+            res_d.append([0, i["chl"], i["chr"]])
+
+    # for i in range(len(bvh)):
+    #     print(res_v[i],"\t",res_d[i])
+
+    return len(res_v), np.array(res_v, dtype=np.float32), np.array(res_d, dtype=np.int32)
+
+###################################################
+
 triangles = [
 ]
 
 for i in range(10):
-    o = rvec2()
-    triangles.append({
-        "p0": rvec2() * 0.1 + o * 0.9,
-        "p1": rvec2() * 0.1 + o * 0.9,
-        "p2": rvec2() * 0.1 + o * 0.9
-    })
+    o = bvh_rvec3()
+    triangles.append([
+         bvh_rvec3() * 0.1 + o * 0.9,
+         bvh_rvec3() * 0.1 + o * 0.9,
+         bvh_rvec3() * 0.1 + o * 0.9
+    ])
+print(buildBVH(triangles))
 
 
-bvh = [{}]
-solve(bvh, 0, [i for i in range(len(triangles))], triangles)
-
-for i in bvh:
-    print(i)
-
-
-tri_node_id = {}
-node_id_color = {}
-for idx, i in enumerate(bvh):
-    for j in i["triangles"]:
-        tri_node_id[j] = idx
-
-for i in range(len(bvh)):
-    node_id_color[i]=random.randint(0, 16777215)
-
-R=512
-gui = ti.GUI(res=R)
-
-for idx, i in enumerate(triangles):
-    gui.triangle(i["p0"],i["p1"],i["p2"], node_id_color[tri_node_id[idx]])
-
-for i in bvh:
-    if i["leaf"]==False:
-        gui.rect(i["p0"][:2], i["p1"][:2], radius=random.randint(1,3), color=random.randint(0, 16777215))
-
-gui.show()
-
-while True:
-    gui.get_events()
