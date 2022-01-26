@@ -183,21 +183,26 @@ scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
 scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
-scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=5)
-scene += readObject('assets/test_r.obj', 0, offset=[0, -9.9, 0], scale=3)
+scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=7)
+scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, -8], scale=2)
+scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, 8], scale=2)
+scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, -8], scale=2)
+scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, 8], scale=2)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-scene += readObject('assets/bunny.obj', 5, offset=[0, -1, 0], scale=15)
+scene += readObject('assets/bunny.obj', 5, offset=[0, -1, -1], scale=10)
+scene += readObject('assets/bunny.obj', 6, offset=[0, -1, 1], scale=10)
 
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
-    [[0, 0, 0], [7, 7, 7], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.1, 0.1, 0.1], [0, 0, 0], [0, 0, 0]],
+    [[0, 0, 0], [10, 10, 10], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 0.9], [0.4, 0.4, 0.4], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.2, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.0, 0.0, 0.2], [0, 0, 0], [0, 0, 0]],
-    [[2, 0, 0], [0.7, 0.4, 0.9], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 0.9], [0.7, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 0.9], [0.0, 0.0, 0.7], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.3, 0.3], [0.6, 0.5, 0.2], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 0.2], [0.6 * 2, 0.5 * 2, 0.2 * 2], [0, 0, 0], [0, 0, 0]],
 ]
 mesh_desc = np.array(scene)
 mesh_material_desc = np.array(scene_material_id)
@@ -421,8 +426,10 @@ def sample_light():
     rnd = ti.random()
     idx = 0
     for i in range(N_LIGHT_TRIANGLES):
-        if rnd < lsp_p[i]:
+        if rnd <= lsp_p[i]:
             idx = i
+        else:
+            break
     tid = lsp_d[idx]
     # sample a point
     bc0 = ti.random()
@@ -436,9 +443,44 @@ def sample_light():
     return tid, bc0*p0 + bc1*p1+bc2*p2
 
 
+@ti.func
+def ggx_d(a, i, o, n):
+    h = (i+o).normalized()
+    nh = ti.acos(n.dot(h))
+    x = a / ti.pow(ti.cos(nh), 2) / (a*a + ti.pow(ti.tan(nh), 2))
+    # return 1.0 
+    return 1.0 / 3.14159 * x * x 
+
+
+@ti.func
+def smith_g1(a, v, i, o, n):
+    h = (i+o).normalized()
+    ans = 0.0
+    if v.dot(h) * v.dot(n) > 0:
+        x = 1.0 / a / ti.tan(ti.acos(n.dot(v)))
+        if a < 1.6:
+            ans = (3.535*a + 2.181*a*a) / (1 + 2.276*a + 2.577*a*a)
+        else:
+            ans = 1.0
+    # return 1.0
+    return ans
+
+
+@ti.func
+def smith_g(a, i, o, n):
+    return smith_g1(a, i, i, o, n) * smith_g1(a, o, i, o, n)
+
+
+@ti.func
+def microfacet_brdf(ad, ag, i, o, n):
+    ni = n.dot(i) + 1e-6
+    no = n.dot(o) + 1e-6
+    return ggx_d(ad, i, o, n) * smith_g(ag, i, o, n) * 1.0 / 4 / ni / no
+
+
 @ti.kernel
 def render():
-    SPP = 16
+    SPP = 1000
     WIDTH_SEG = IMG_WIDTH // WIDTH_DIV
     for thread_id in range(IMG_HEIGHT * WIDTH_DIV):
         y = thread_id // WIDTH_DIV
@@ -478,8 +520,7 @@ def render():
                                                                1] * coef * normal.dot(-dir)
                                 break
                             elif material_type_id == 1:
-                                # Pure lambert
-                                brdf = material_attributes[material_id, 1]
+                                # Microfacet (GGX_D, SMITH_G, no Fresnel)
 
                                 light_tid, light_pos = sample_light()
                                 light_p0 = mesh_vertices[light_tid, 0]
@@ -488,16 +529,31 @@ def render():
                                 light_normal = (
                                     light_p1-light_p0).cross(light_p2-light_p0).normalized()
 
+                                brdf_1 = material_attributes[material_id, 1] / 3.14159 * microfacet_brdf(
+                                    material_attributes[material_id, 0][1],
+                                    material_attributes[material_id, 0][2],
+                                    (light_pos-hit_pos).normalized(),
+                                    -dir,
+                                    normal
+                                )
+
                                 if checkVisibility(hit_pos, light_pos, thread_id) and light_normal.dot(hit_pos-light_pos) > 0:
-                                    # ! THIS IS NOT CORRECT YET, JUST CAN WORK
-                                    # TODO: MAKE IT CORRECT AGAIN!
-                                    ans += coef * brdf * normal.dot((light_pos-hit_pos).normalized()) * material_attributes[mesh_material_id[light_tid], 1] * \
+                                    ans += coef * brdf_1 * normal.dot((light_pos-hit_pos).normalized()) * material_attributes[mesh_material_id[light_tid], 1] * \
                                         light_normal.dot(
                                             (hit_pos-light_pos).normalized()) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area
 
                                 light_source_visible = False
-
+                                
                                 wi = sample_brdf(normal)
+
+                                brdf = material_attributes[material_id, 1] / 3.14159 * microfacet_brdf(
+                                    material_attributes[material_id, 0][1],
+                                    material_attributes[material_id, 0][2],
+                                    wi,
+                                    -dir,
+                                    normal
+                                )
+
                                 coef *= brdf * 3.14159
                                 orig = hit_pos + wi * 1e-4
                                 dir = wi
@@ -522,7 +578,7 @@ gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
 frame_id = 500
 
 ina_r = 3.0
-ina_h = 1.0
+ina_h = 0.0
 
 while True:
     stt = tm()
