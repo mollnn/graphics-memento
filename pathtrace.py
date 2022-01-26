@@ -3,9 +3,6 @@
 # TODO: microfacet
 # TODO: texture
 
-from unittest import result
-from matplotlib.lines import Line2D
-from matplotlib.pyplot import stackplot
 import numpy as np
 import taichi as ti
 from time import time as tm
@@ -112,7 +109,11 @@ def divideTriangles(objs, axis, triangles):
 
 def buildBVH_recursive(bvh, p, objs, triangles):
     if len(objs) > 2:
-        tl, tr = divideTriangles(objs, random.randint(0, 2), triangles)
+        tmp_aabb = getAABBs(objs, triangles)
+        delta = tmp_aabb["p1"] - tmp_aabb["p0"]
+        axis = np.argmax(delta)
+        # axis = random.randint(0, 2) # pure random axis selection
+        tl, tr = divideTriangles(objs, axis, triangles)
         pl = len(bvh)
         bvh.append({})
         pr = len(bvh)
@@ -179,17 +180,17 @@ scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
 scene += readObject('assets/cube.obj', 0, offset=[0, 14.9, 0], scale=5)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-scene += readObject('assets/bunny.obj', 2, offset=[0, 0, 0], scale=10)
+scene += readObject('assets/bunny.obj', 5, offset=[0, 0, 0], scale=10)
 
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
-    [[0, 0, 0], [4, 4, 4], [0, 0, 0], [0, 0, 0]],
+    [[0, 0, 0], [5, 5, 5], [0, 0, 0], [0, 0, 0]],
     [[1, 0, 0], [0.3, 0.3, 0.3], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
     [[1, 0, 0], [0.3, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
     [[1, 0, 0], [0.0, 0.3, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.12, 0.09, 0.05], [0, 0, 0], [0, 0, 0]]
+    [[2, 0, 0], [0.7, 0.4, 0.9], [0, 0, 0], [0, 0, 0]],
 ]
 mesh_desc = np.array(scene)
 mesh_material_desc = np.array(scene_material_id)
@@ -199,6 +200,7 @@ bvh_desc = buildBVH(mesh_desc)
 
 N_TRIANGLES = len(mesh_desc)
 IMG_HEIGHT = IMG_WIDTH = 512
+WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
 N_MATERIALS = 100
 N_BVH_NODES = bvh_desc[0]
@@ -220,8 +222,8 @@ bvh_v = ti.Matrix.field(2, 3, ti.f32, (N_BVH_NODES))
 bvh_d = ti.Vector.field(3, ti.i32, (N_BVH_NODES))
 
 # Some global temp memory used for BVH-ray intersection
-bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 30))
-bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 100))
+bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * WIDTH_DIV , 30))
+bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * WIDTH_DIV, 200))
 
 bvh_int_cnt = ti.field(ti.f32,(4))
 
@@ -290,6 +292,8 @@ def getIntersection(orig, dir, _id):
     # TODO: BVH Support
     ans_t, ans_b1, ans_b2, ans_obj_id = 2e9, 0., 0., -1
 
+    #################################################################################
+
     # Stack element is bvh node id
     # Always focus on the top element
     # Always test intersection with top aabb
@@ -339,10 +343,14 @@ def getIntersection(orig, dir, _id):
         if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, bvhim_result[_id, i]
 
+    #################################################################################
+
     # for i in range(mesh_vertices.shape[0]):
     #     t, b1, b2 = checkIntersect(orig, dir, i)
     #     if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
     #         ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
+
+    #################################################################################
 
     return ans_t, ans_b1, ans_b2, ans_obj_id
 
@@ -381,54 +389,59 @@ def sample_brdf(normal):
 
 @ti.kernel
 def render():
-    SPP = 8
-    for x, y in img:
-        tans = ti.Vector([0., 0., 0.], dt=ti.f32)
-        for sp in range(SPP):
-            orig, dir = generateInitialRay(x, y)
-            N_BOUNCE = 6    # RR will cause warp divergence
-            ans = ti.Vector([0., 0., 0.], dt=ti.f32)
-            coef = ti.Vector([1., 1., 1.], dt=ti.f32)
-            for _ in range(N_BOUNCE):
-                t, bc1, bc2, triangle_id = getIntersection(
-                    orig, dir, y*IMG_WIDTH+x)
+    SPP = 2048
+    WIDTH_SEG = IMG_WIDTH // WIDTH_DIV
+    for thread_id in range(IMG_HEIGHT * WIDTH_DIV):
+        y = thread_id // WIDTH_DIV
+        xoff = thread_id % WIDTH_DIV * WIDTH_SEG
+        for x0 in range(WIDTH_SEG):
+            x = xoff + x0
+            tans = ti.Vector([0., 0., 0.], dt=ti.f32)
+            for sp in range(SPP):
+                orig, dir = generateInitialRay(x, y)
+                N_BOUNCE = 8    # RR will cause warp divergence
+                ans = ti.Vector([0., 0., 0.], dt=ti.f32)
+                coef = ti.Vector([1., 1., 1.], dt=ti.f32)
+                for _ in range(N_BOUNCE):
+                    t, bc1, bc2, triangle_id = getIntersection(
+                        orig, dir, thread_id)
 
-                if triangle_id != -1:
-                    hit_pos = orig + dir * t
-                    p0 = mesh_vertices[triangle_id, 0]
-                    p1 = mesh_vertices[triangle_id, 1]
-                    p2 = mesh_vertices[triangle_id, 2]
-                    material_id = mesh_material_id[triangle_id]
-                    material_type_id = material_attributes[material_id, 0][0]
-                    normal = (p1-p0).cross(p2-p0).normalized()
-                    if normal.dot(-dir) > 0:
+                    if triangle_id != -1:
+                        hit_pos = orig + dir * t
+                        p0 = mesh_vertices[triangle_id, 0]
+                        p1 = mesh_vertices[triangle_id, 1]
+                        p2 = mesh_vertices[triangle_id, 2]
+                        material_id = mesh_material_id[triangle_id]
+                        material_type_id = material_attributes[material_id, 0][0]
+                        normal = (p1-p0).cross(p2-p0).normalized()
+                        if normal.dot(-dir) > 0:
 
-                        # Implement different materials here
-                        if material_type_id == 0:
-                            # Area light
-                            ans += material_attributes[material_id, 1] * coef
+                            # Implement different materials here
+                            if material_type_id == 0:
+                                # Area light
+                                ans += material_attributes[material_id, 1] * coef
+                                break
+                            elif material_type_id == 1:
+                                # Pure lambert
+                                brdf = material_attributes[material_id, 1]
+                                wi = sample_brdf(normal)
+                                coef *= brdf * 3.14159
+                                orig = hit_pos + wi * 1e-4
+                                dir = wi
+                            elif material_type_id == 2:
+                                # Pure specular
+                                brdf = material_attributes[material_id, 1]
+                                wi = 2*normal.dot(-dir)*normal+dir
+                                wi = wi.normalized()
+                                coef *= brdf
+                                orig = hit_pos + wi * 1e-4
+                                dir = wi
+                        else:
                             break
-                        elif material_type_id == 1:
-                            # Pure lambert
-                            brdf = material_attributes[material_id, 1]
-                            wi = sample_brdf(normal)
-                            coef *= brdf * 3.14159
-                            orig = hit_pos + wi * 1e-4
-                            dir = wi
-                        elif material_type_id == 2:
-                            # Pure specular
-                            brdf = material_attributes[material_id, 1]
-                            wi = 2*normal.dot(-dir)*normal+dir
-                            wi = wi.normalized()
-                            coef *= brdf
-                            orig = hit_pos + wi * 1e-4
-                            dir = wi
                     else:
                         break
-                else:
-                    break
-            tans += ans
-        img[x, y] = ti.pow(tans / SPP, 2.2) * 1.5
+                tans += ans
+            img[x, y] = ti.pow(tans / SPP, 2.2) 
 
 
 gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
@@ -456,15 +469,17 @@ while True:
     cam_gaze[None] = -cam_pos[None]
     cam_gaze[None] = cam_gaze[None].normalized()
 
+    bvh_int_cnt[0] = 1e-6
+    bvh_int_cnt[1] = 0
+    bvh_int_cnt[2] = 0
+    bvh_int_cnt[3] = 0
+
     render()
     ti.sync()
     gui.set_image(img)
     gui.show()
     if frame_id % 10 == 0:
-        print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9))
+        print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9), "   #triangles", len(mesh_desc))
         print("average BVH nodes: ", bvh_int_cnt[1] / bvh_int_cnt[0], " max", bvh_int_cnt[2], " maxobj", bvh_int_cnt[3])
-    bvh_int_cnt[0] = 0
-    bvh_int_cnt[1] = 0
-    bvh_int_cnt[2] = 0
-    bvh_int_cnt[3] = 0
+
     frame_id += 10

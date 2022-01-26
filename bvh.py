@@ -96,8 +96,11 @@ def divide(objs, axis, triangles):
 
 
 def solve(bvh, p, objs, triangles):
-    if len(objs)>2:
-        tl, tr = divide(objs, random.randint(0,1), triangles)    # MUST MODITY 1 TO 2 WHEN USED IN 3D
+    if len(objs)>5:
+        tmp_aabb = getAABBs(objs, triangles)
+        delta = tmp_aabb["p1"] - tmp_aabb["p0"]
+        axis = np.argmax(delta)
+        tl, tr = divide(objs, axis, triangles)    # MUST MODITY 1 TO 2 WHEN USED IN 3D
         pl = len(bvh)
         bvh.append({})
         pr = len(bvh)
@@ -114,12 +117,13 @@ def solve(bvh, p, objs, triangles):
 triangles = [
 ]
 
-for i in range(10):
+for i in range(100):
     o = rvec2()
+    # o = np.array([i//10*0.08+0.1, i%10*0.08+0.1, 0], dtype=np.float32)
     triangles.append({
-        "p0": rvec2() * 0.1 + o * 0.9,
-        "p1": rvec2() * 0.1 + o * 0.9,
-        "p2": rvec2() * 0.1 + o * 0.9
+        "p0": rvec2() * 0.05 + o * 0.9,
+        "p1": rvec2() * 0.05 + o * 0.9,
+        "p2": rvec2() * 0.05 + o * 0.9
     })
 
 
