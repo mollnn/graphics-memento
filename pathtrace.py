@@ -173,20 +173,26 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
     return ans
 
 
+##############################################################
+##############################################################
+##############################################################
+
+
 scene = []
 scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
 scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
 scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=5)
+scene += readObject('assets/test_r.obj', 0, offset=[0, -9.9, 0], scale=3)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-scene += readObject('assets/bunny.obj', 5, offset=[0, 0, 0], scale=10)
+scene += readObject('assets/bunny.obj', 5, offset=[0, -1, 0], scale=15)
 
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
-    [[0, 0, 0], [2, 2, 2], [0, 0, 0], [0, 0, 0]],
+    [[0, 0, 0], [7, 7, 7], [0, 0, 0], [0, 0, 0]],
     [[1, 0, 0], [0.1, 0.1, 0.1], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
     [[1, 0, 0], [0.2, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
@@ -209,7 +215,7 @@ N_LIGHT_TRIANGLES = len(light_sampler_cdf)
 bvh_desc = buildBVH(mesh_desc)
 
 N_TRIANGLES = len(mesh_desc)
-IMG_HEIGHT = IMG_WIDTH = 256
+IMG_HEIGHT = IMG_WIDTH = 512
 WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
 N_MATERIALS = 100
@@ -441,10 +447,16 @@ def render():
             x = xoff + x0
             tans = ti.Vector([0., 0., 0.], dt=ti.f32)
             for sp in range(SPP):
-                orig, dir = generateInitialRay(x, y)
+                x1 = ti.random()
+                y1 = ti.random()
+                orig, dir = generateInitialRay(x - 0.5 + x1, y - 0.5 + y1)
                 N_BOUNCE = 8    # RR will cause warp divergence
                 ans = ti.Vector([0., 0., 0.], dt=ti.f32)
                 coef = ti.Vector([1., 1., 1.], dt=ti.f32)
+
+                # * Set False after diffuse (sampling light)
+                light_source_visible = True
+
                 for _ in range(N_BOUNCE):
                     t, bc1, bc2, triangle_id = getIntersection(
                         orig, dir, thread_id)
@@ -458,35 +470,12 @@ def render():
                         material_type_id = material_attributes[material_id, 0][0]
                         normal = (p1-p0).cross(p2-p0).normalized()
                         if normal.dot(-dir) > 0:
-
-                            # Sampling BRDF version
-                            # Implement different materials here
-                            # if material_type_id == 0:
-                            #     # Area light
-                            #     ans += material_attributes[material_id, 1] * coef
-                            #     break
-                            # elif material_type_id == 1:
-                            #     # Pure lambert
-                            #     brdf = material_attributes[material_id, 1]
-                            #     wi = sample_brdf(normal)
-                            #     coef *= brdf * 3.14159
-                            #     orig = hit_pos + wi * 1e-4
-                            #     dir = wi
-                            # elif material_type_id == 2:
-                            #     # Pure specular
-                            #     brdf = material_attributes[material_id, 1]
-                            #     wi = 2*normal.dot(-dir)*normal+dir
-                            #     wi = wi.normalized()
-                            #     coef *= brdf
-                            #     orig = hit_pos + wi * 1e-4
-                            #     dir = wi
-
-                            # Sampling light version
                             # Implement different materials here
                             if material_type_id == 0:
                                 # Area light
-                                if _ == 0:  # Add direct contribution of light source
-                                    ans += material_attributes[material_id, 1] * coef
+                                if light_source_visible:  # Add direct contribution of light source
+                                    ans += material_attributes[material_id,
+                                                               1] * coef * normal.dot(-dir)
                                 break
                             elif material_type_id == 1:
                                 # Pure lambert
@@ -502,9 +491,11 @@ def render():
                                 if checkVisibility(hit_pos, light_pos, thread_id) and light_normal.dot(hit_pos-light_pos) > 0:
                                     # ! THIS IS NOT CORRECT YET, JUST CAN WORK
                                     # TODO: MAKE IT CORRECT AGAIN!
-                                    ans += coef * brdf * normal.dot(light_pos-hit_pos) * material_attributes[mesh_material_id[light_tid], 1] * \
+                                    ans += coef * brdf * normal.dot((light_pos-hit_pos).normalized()) * material_attributes[mesh_material_id[light_tid], 1] * \
                                         light_normal.dot(
-                                            hit_pos-light_pos) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area / 50
+                                            (hit_pos-light_pos).normalized()) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area
+
+                                light_source_visible = False
 
                                 wi = sample_brdf(normal)
                                 coef *= brdf * 3.14159
@@ -518,12 +509,13 @@ def render():
                                 coef *= brdf
                                 orig = hit_pos + wi * 1e-4
                                 dir = wi
+                                light_source_visible = True
                         else:
                             break
                     else:
                         break
                 tans += ans
-            img[x, y] = ti.pow(tans / SPP, 2.2)
+            img[x, y] = ti.pow(tans / SPP, 1.0)
 
 
 gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
