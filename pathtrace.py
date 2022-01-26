@@ -3,6 +3,7 @@
 # TODO: microfacet
 # TODO: texture
 
+from importlib_metadata import itertools
 import numpy as np
 import taichi as ti
 from time import time as tm
@@ -177,7 +178,7 @@ scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
 scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
-scene += readObject('assets/cube.obj', 0, offset=[0, 14.9, 0], scale=5)
+scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=5)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
 scene += readObject('assets/bunny.obj', 5, offset=[0, 0, 0], scale=10)
@@ -185,21 +186,30 @@ scene += readObject('assets/bunny.obj', 5, offset=[0, 0, 0], scale=10)
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
-    [[0, 0, 0], [5, 5, 5], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.3, 0.3, 0.3], [0, 0, 0], [0, 0, 0]],
+    [[0, 0, 0], [2, 2, 2], [0, 0, 0], [0, 0, 0]],
+    [[1, 0, 0], [0.1, 0.1, 0.1], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.3, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0, 0], [0.0, 0.3, 0.0], [0, 0, 0], [0, 0, 0]],
+    [[1, 0, 0], [0.2, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
+    [[1, 0, 0], [0.0, 0.0, 0.2], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.7, 0.4, 0.9], [0, 0, 0], [0, 0, 0]],
 ]
 mesh_desc = np.array(scene)
 mesh_material_desc = np.array(scene_material_id)
 matattrs_np = np.array(matattrs, dtype=np.float32)
-
+light_tids = [(i, norm(np.cross(mesh_desc[i][1]-mesh_desc[i][0], mesh_desc[i][2]-mesh_desc[i][0])))
+              for i in range(len(scene)) if matattrs[scene_material_id[i]][0][0] in [0]]  # Emitting material ids here
+sum_light_area = sum(i[1] for i in light_tids)
+light_tids = [(i[0], i[1]/sum_light_area) for i in light_tids]
+light_sampler_tid = np.array([i[0] for i in light_tids])
+light_sampler_cdf = np.array(
+    list(itertools.accumulate([i[1] for i in light_tids])))
+if len(light_sampler_cdf) > 0:
+    light_sampler_cdf[-1] = 1.0     # float accumulate correction
+N_LIGHT_TRIANGLES = len(light_sampler_cdf)
 bvh_desc = buildBVH(mesh_desc)
 
 N_TRIANGLES = len(mesh_desc)
-IMG_HEIGHT = IMG_WIDTH = 512
+IMG_HEIGHT = IMG_WIDTH = 256
 WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
 N_MATERIALS = 100
@@ -220,12 +230,14 @@ img_w = ti.field(ti.f32, ())
 img_h = ti.field(ti.f32, ())
 bvh_v = ti.Matrix.field(2, 3, ti.f32, (N_BVH_NODES))
 bvh_d = ti.Vector.field(3, ti.i32, (N_BVH_NODES))
+lsp_p = ti.field(ti.f32, (N_LIGHT_TRIANGLES))
+lsp_d = ti.field(ti.i32, (N_LIGHT_TRIANGLES))
 
 # Some global temp memory used for BVH-ray intersection
-bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * WIDTH_DIV , 30))
+bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * WIDTH_DIV, 30))
 bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * WIDTH_DIV, 200))
 
-bvh_int_cnt = ti.field(ti.f32,(4))
+bvh_int_cnt = ti.field(ti.f32, (4))
 
 mesh_vertices.from_numpy(mesh_desc)
 mesh_material_id.from_numpy(mesh_material_desc)
@@ -241,6 +253,8 @@ img_h .from_numpy(np.array(IMG_HEIGHT))
 img.from_numpy(np.zeros((IMG_HEIGHT, IMG_WIDTH, 3)))
 bvh_v.from_numpy(bvh_desc[1])
 bvh_d.from_numpy(bvh_desc[2])
+lsp_p.from_numpy(light_sampler_cdf)
+lsp_d.from_numpy(light_sampler_tid)
 
 
 @ti.func
@@ -305,7 +319,6 @@ def getIntersection(orig, dir, _id):
     # * Stack size <= Depth + 1
     # * Candidates size is not limited :( We just assume a limitation
 
-    
     stack_ptr = 0
     result_ptr = 0
     bvhim_stack[_id, stack_ptr] = 0
@@ -356,6 +369,15 @@ def getIntersection(orig, dir, _id):
 
 
 @ti.func
+def checkVisibility(p, q, _id):
+    d = (q-p).normalized()
+    p1 = p + d * 1e-4
+    thres = (q-p).norm() - 1e-3
+    t, b1, b2, obj = getIntersection(p1, d, _id)
+    return t > thres
+
+
+@ti.func
 def generateInitialRay(img_x, img_y):
     cam_handle = cam_gaze[None].cross(cam_top[None]).normalized()
     canonical_x = (img_x + 0.5) / img_w[None] * 2 - 1
@@ -387,9 +409,30 @@ def sample_brdf(normal):
     return w.normalized()
 
 
+@ti.func
+def sample_light():
+    # sample a light
+    rnd = ti.random()
+    idx = 0
+    for i in range(N_LIGHT_TRIANGLES):
+        if rnd < lsp_p[i]:
+            idx = i
+    tid = lsp_d[idx]
+    # sample a point
+    bc0 = ti.random()
+    bc1 = ti.random()
+    bc2 = ti.random()
+    bcs = bc0 + bc1 + bc2
+    bc0, bc1, bc2 = bc0 / bcs, bc1/bcs, bc2/bcs
+    p0 = mesh_vertices[tid, 0]
+    p1 = mesh_vertices[tid, 1]
+    p2 = mesh_vertices[tid, 2]
+    return tid, bc0*p0 + bc1*p1+bc2*p2
+
+
 @ti.kernel
 def render():
-    SPP = 2048
+    SPP = 16
     WIDTH_SEG = IMG_WIDTH // WIDTH_DIV
     for thread_id in range(IMG_HEIGHT * WIDTH_DIV):
         y = thread_id // WIDTH_DIV
@@ -416,14 +459,53 @@ def render():
                         normal = (p1-p0).cross(p2-p0).normalized()
                         if normal.dot(-dir) > 0:
 
+                            # Sampling BRDF version
+                            # Implement different materials here
+                            # if material_type_id == 0:
+                            #     # Area light
+                            #     ans += material_attributes[material_id, 1] * coef
+                            #     break
+                            # elif material_type_id == 1:
+                            #     # Pure lambert
+                            #     brdf = material_attributes[material_id, 1]
+                            #     wi = sample_brdf(normal)
+                            #     coef *= brdf * 3.14159
+                            #     orig = hit_pos + wi * 1e-4
+                            #     dir = wi
+                            # elif material_type_id == 2:
+                            #     # Pure specular
+                            #     brdf = material_attributes[material_id, 1]
+                            #     wi = 2*normal.dot(-dir)*normal+dir
+                            #     wi = wi.normalized()
+                            #     coef *= brdf
+                            #     orig = hit_pos + wi * 1e-4
+                            #     dir = wi
+
+                            # Sampling light version
                             # Implement different materials here
                             if material_type_id == 0:
                                 # Area light
-                                ans += material_attributes[material_id, 1] * coef
+                                if _ == 0:  # Add direct contribution of light source
+                                    ans += material_attributes[material_id, 1] * coef
                                 break
                             elif material_type_id == 1:
                                 # Pure lambert
                                 brdf = material_attributes[material_id, 1]
+
+                                light_tid, light_pos = sample_light()
+                                light_p0 = mesh_vertices[light_tid, 0]
+                                light_p1 = mesh_vertices[light_tid, 1]
+                                light_p2 = mesh_vertices[light_tid, 2]
+                                light_normal = (
+                                    light_p1-light_p0).cross(light_p2-light_p0).normalized()
+
+                                if checkVisibility(hit_pos, light_pos, thread_id) and light_normal.dot(hit_pos-light_pos) > 0:
+                                    # ! THIS IS NOT CORRECT YET, JUST CAN WORK
+                                    # TODO: MAKE IT CORRECT AGAIN!
+                                    ans += coef * brdf * normal.dot(light_pos-hit_pos) * material_attributes[mesh_material_id[light_tid], 1] * \
+                                        light_normal.dot(
+                                            hit_pos-light_pos) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area / 50
+
                                 wi = sample_brdf(normal)
                                 coef *= brdf * 3.14159
                                 orig = hit_pos + wi * 1e-4
@@ -441,7 +523,7 @@ def render():
                     else:
                         break
                 tans += ans
-            img[x, y] = ti.pow(tans / SPP, 2.2) 
+            img[x, y] = ti.pow(tans / SPP, 2.2)
 
 
 gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
@@ -479,7 +561,9 @@ while True:
     gui.set_image(img)
     gui.show()
     if frame_id % 10 == 0:
-        print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9), "   #triangles", len(mesh_desc))
-        print("average BVH nodes: ", bvh_int_cnt[1] / bvh_int_cnt[0], " max", bvh_int_cnt[2], " maxobj", bvh_int_cnt[3])
+        print("time usage:", tm()-stt, " able fps:", 1. /
+              (tm()-stt+1e-9), "   #triangles", len(mesh_desc))
+        print("average BVH nodes: ", bvh_int_cnt[1] / bvh_int_cnt[0],
+              " max", bvh_int_cnt[2], " maxobj", bvh_int_cnt[3])
 
     frame_id += 10
