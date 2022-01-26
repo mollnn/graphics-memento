@@ -1,6 +1,5 @@
 # Path Trace (full version)
 #   always sample brdf, bvh, microfacet, texture
-# TODO: bvh
 # TODO: microfacet
 # TODO: texture
 
@@ -108,7 +107,6 @@ def divideTriangles(objs, axis, triangles):
     mid = len(keys) // 2
     lefts = keys[:mid]
     rights = keys[mid:]
-    print("divide ", objs, "into", lefts, rights)
     return [i[1] for i in lefts], [i[1] for i in rights]
 
 
@@ -181,7 +179,7 @@ scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
 scene += readObject('assets/cube.obj', 0, offset=[0, 14.9, 0], scale=5)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-# scene += readObject('assets/rock.obj', 5, offset=[0, 0, 0], scale=0.5)
+scene += readObject('assets/bunny.obj', 2, offset=[0, 0, 0], scale=10)
 
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
@@ -222,8 +220,10 @@ bvh_v = ti.Matrix.field(2, 3, ti.f32, (N_BVH_NODES))
 bvh_d = ti.Vector.field(3, ti.i32, (N_BVH_NODES))
 
 # Some global temp memory used for BVH-ray intersection
-bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 20))
+bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 30))
 bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 100))
+
+bvh_int_cnt = ti.field(ti.f32,(4))
 
 mesh_vertices.from_numpy(mesh_desc)
 mesh_material_id.from_numpy(mesh_material_desc)
@@ -301,14 +301,19 @@ def getIntersection(orig, dir, _id):
     # * Stack size <= Depth + 1
     # * Candidates size is not limited :( We just assume a limitation
 
+    
     stack_ptr = 0
     result_ptr = 0
     bvhim_stack[_id, stack_ptr] = 0
     stack_ptr += 1
+    bvh_int_cnt[0] += 1.0
+    bvh_int_tmp = 0.0
+    bvh_int_obj_tmp = 0.0
 
     while stack_ptr > 0:
         cur_aabb = bvhim_stack[_id, stack_ptr-1]
         stack_ptr -= 1
+        bvh_int_tmp += 1.0
         if cur_aabb != -1:
             if checkIntersectAABB(orig, dir, cur_aabb):
                 if bvh_d[cur_aabb][0] == 0:
@@ -320,21 +325,25 @@ def getIntersection(orig, dir, _id):
                     if bvh_d[cur_aabb][1] != -1:
                         bvhim_result[_id, result_ptr] = bvh_d[cur_aabb][1]
                         result_ptr += 1
+                        bvh_int_obj_tmp += 1.0
                     if bvh_d[cur_aabb][2] != -1:
                         bvhim_result[_id, result_ptr] = bvh_d[cur_aabb][2]
                         result_ptr += 1
+                        bvh_int_obj_tmp += 1.0
+    bvh_int_cnt[1] += bvh_int_tmp
+    bvh_int_cnt[2] = max(bvh_int_cnt[2], bvh_int_tmp)
+    bvh_int_cnt[3] = max(bvh_int_cnt[3], bvh_int_obj_tmp)
 
     for i in range(result_ptr):
         t, b1, b2 = checkIntersect(orig, dir, bvhim_result[_id, i])
         if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, bvhim_result[_id, i]
 
-    # if _id % 10000 == 0:
-        # print(result_ptr, ans_t, ans_obj_id)
     # for i in range(mesh_vertices.shape[0]):
     #     t, b1, b2 = checkIntersect(orig, dir, i)
     #     if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
     #         ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
+
     return ans_t, ans_b1, ans_b2, ans_obj_id
 
 
@@ -377,7 +386,7 @@ def render():
         tans = ti.Vector([0., 0., 0.], dt=ti.f32)
         for sp in range(SPP):
             orig, dir = generateInitialRay(x, y)
-            N_BOUNCE = 8    # RR will cause warp divergence
+            N_BOUNCE = 6    # RR will cause warp divergence
             ans = ti.Vector([0., 0., 0.], dt=ti.f32)
             coef = ti.Vector([1., 1., 1.], dt=ti.f32)
             for _ in range(N_BOUNCE):
@@ -448,8 +457,14 @@ while True:
     cam_gaze[None] = cam_gaze[None].normalized()
 
     render()
+    ti.sync()
     gui.set_image(img)
     gui.show()
     if frame_id % 10 == 0:
         print("time usage:", tm()-stt, " able fps:", 1./(tm()-stt+1e-9))
+        print("average BVH nodes: ", bvh_int_cnt[1] / bvh_int_cnt[0], " max", bvh_int_cnt[2], " maxobj", bvh_int_cnt[3])
+    bvh_int_cnt[0] = 0
+    bvh_int_cnt[1] = 0
+    bvh_int_cnt[2] = 0
+    bvh_int_cnt[3] = 0
     frame_id += 10
