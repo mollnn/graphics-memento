@@ -108,6 +108,7 @@ def divideTriangles(objs, axis, triangles):
     mid = len(keys) // 2
     lefts = keys[:mid]
     rights = keys[mid:]
+    print("divide ", objs, "into", lefts, rights)
     return [i[1] for i in lefts], [i[1] for i in rights]
 
 
@@ -173,22 +174,15 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
 
 
 scene = []
-# scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
-# scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
-# scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
-# scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
-# scene += readObject('assets/cube.obj', 0, offset=[0, 14.9, 0], scale=5)
-# scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
-# scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-# scene += readObject('assets/rock.obj', 5, offset=[0, 0, 0], scale=0.5)
-scene += readObject('assets/cube.obj', 0, offset=[0, -20, 0], scale=10)
-scene += readObject('assets/cube.obj', 0, offset=[-20, 0, 0], scale=10)
-scene += readObject('assets/cube.obj', 0, offset=[0, 0, -20], scale=10)
-scene += readObject('assets/cube.obj', 0, offset=[0, 20, 0], scale=10)
+scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
+scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
+scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
+scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
 scene += readObject('assets/cube.obj', 0, offset=[0, 14.9, 0], scale=5)
-scene += readObject('assets/cube.obj', 0, offset=[20, 0, 0], scale=10)
-scene += readObject('assets/cube.obj', 0, offset=[0, 0, 20], scale=10)
-scene += readObject('assets/rock.obj', 0, offset=[0, 0, 0], scale=0.5)
+scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
+scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
+# scene += readObject('assets/rock.obj', 5, offset=[0, 0, 0], scale=0.5)
+
 scene_material_id = [i[3] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
@@ -206,7 +200,7 @@ matattrs_np = np.array(matattrs, dtype=np.float32)
 bvh_desc = buildBVH(mesh_desc)
 
 N_TRIANGLES = len(mesh_desc)
-IMG_HEIGHT = IMG_WEIGHT = 512
+IMG_HEIGHT = IMG_WIDTH = 512
 CLIP_N = CLIP_R = CLIP_H = 0.1
 N_MATERIALS = 100
 N_BVH_NODES = bvh_desc[0]
@@ -215,7 +209,7 @@ mesh_vertices = ti.Vector.field(3, ti.f32, (N_TRIANGLES, 3))
 mesh_material_id = ti.field(ti.i32, (N_TRIANGLES))
 material_attributes = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
 
-img = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WEIGHT))
+img = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))
 cam_pos = ti.Vector.field(3, ti.f32, ())
 cam_gaze = ti.Vector.field(3, ti.f32, ())
 cam_top = ti.Vector.field(3, ti.f32, ())
@@ -228,8 +222,8 @@ bvh_v = ti.Matrix.field(2, 3, ti.f32, (N_BVH_NODES))
 bvh_d = ti.Vector.field(3, ti.i32, (N_BVH_NODES))
 
 # Some global temp memory used for BVH-ray intersection
-bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * IMG_WEIGHT, 20))
-bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * IMG_WEIGHT, 50))
+bvhim_stack = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 20))
+bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * IMG_WIDTH, 100))
 
 mesh_vertices.from_numpy(mesh_desc)
 mesh_material_id.from_numpy(mesh_material_desc)
@@ -240,9 +234,9 @@ cam_top .from_numpy(np.array([0., 1, 0]))
 clip_n .from_numpy(np.array(CLIP_N))
 clip_r .from_numpy(np.array(CLIP_R))
 clip_h .from_numpy(np.array(CLIP_H))
-img_w .from_numpy(np.array(IMG_WEIGHT))
+img_w .from_numpy(np.array(IMG_WIDTH))
 img_h .from_numpy(np.array(IMG_HEIGHT))
-img.from_numpy(np.zeros((IMG_HEIGHT, IMG_WEIGHT, 3)))
+img.from_numpy(np.zeros((IMG_HEIGHT, IMG_WIDTH, 3)))
 bvh_v.from_numpy(bvh_desc[1])
 bvh_d.from_numpy(bvh_desc[2])
 
@@ -272,21 +266,21 @@ def checkIntersect(orig, dir, trid):
 def checkIntersectAABB(orig, dir, aabbid):
     aabb_v = bvh_v[aabbid]
     aabb_d = bvh_d[aabbid]
-    tx0 = (aabb_v[0, 0]-orig[0]) / dir[0]
-    tx1 = (aabb_v[1, 0]-orig[0]) / dir[0]
+    tx0 = (aabb_v[0, 0]-orig[0]) / (dir[0] + 1e-6)
+    tx1 = (aabb_v[1, 0]-orig[0]) / (dir[0] + 1e-6)
     if tx0 > tx1:
         tx0, tx1 = tx1, tx0
-    ty0 = (aabb_v[0, 1]-orig[1]) / dir[1]
-    ty1 = (aabb_v[1, 1]-orig[1]) / dir[1]
+    ty0 = (aabb_v[0, 1]-orig[1]) / (dir[1] + 1e-6)
+    ty1 = (aabb_v[1, 1]-orig[1]) / (dir[1] + 1e-6)
     if ty0 > ty1:
         ty0, ty1 = ty1, ty0
-    tz0 = (aabb_v[0, 2]-orig[2]) / dir[2]
-    tz1 = (aabb_v[1, 2]-orig[2]) / dir[2]
+    tz0 = (aabb_v[0, 2]-orig[2]) / (dir[2] + 1e-6)
+    tz1 = (aabb_v[1, 2]-orig[2]) / (dir[2] + 1e-6)
     if tz0 > tz1:
         tz0, tz1 = tz1, tz0
     t0 = max(tx0, ty0, tz0)
     t1 = min(tx1, ty1, tz1)
-    return t0 <= t1 and t1 > 0
+    return t0 <= t1 and t1 >= 0
 
 
 @ti.func
@@ -333,10 +327,10 @@ def getIntersection(orig, dir, _id):
     for i in range(result_ptr):
         t, b1, b2 = checkIntersect(orig, dir, bvhim_result[_id, i])
         if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
-            ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
+            ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, bvhim_result[_id, i]
 
-    if _id % 10000 == 0:
-        print(result_ptr, ans_t, ans_obj_id)
+    # if _id % 10000 == 0:
+        # print(result_ptr, ans_t, ans_obj_id)
     # for i in range(mesh_vertices.shape[0]):
     #     t, b1, b2 = checkIntersect(orig, dir, i)
     #     if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
@@ -388,7 +382,7 @@ def render():
             coef = ti.Vector([1., 1., 1.], dt=ti.f32)
             for _ in range(N_BOUNCE):
                 t, bc1, bc2, triangle_id = getIntersection(
-                    orig, dir, y*IMG_HEIGHT+x)
+                    orig, dir, y*IMG_WIDTH+x)
 
                 if triangle_id != -1:
                     hit_pos = orig + dir * t
@@ -420,17 +414,15 @@ def render():
                             coef *= brdf
                             orig = hit_pos + wi * 1e-4
                             dir = wi
-
                     else:
                         break
-
                 else:
                     break
             tans += ans
         img[x, y] = ti.pow(tans / SPP, 2.2) * 1.5
 
 
-gui = ti.GUI(res=(IMG_WEIGHT, IMG_HEIGHT))
+gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
 frame_id = 500
 
 ina_r = 3.0
