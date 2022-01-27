@@ -1,7 +1,5 @@
 # Path Trace (full version)
-#   always sample brdf, bvh, microfacet, texture
-# TODO: microfacet
-# TODO: texture
+#   sample mesh light, bvh, microfacet, texture
 
 from importlib_metadata import itertools
 import numpy as np
@@ -10,6 +8,7 @@ from time import time as tm
 import time
 from numpy.linalg import norm
 import random
+from matplotlib import pyplot as plt
 
 
 ti.init(arch=ti.cuda, debug=False)
@@ -159,23 +158,92 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
     fp = open(filename, 'r')
     fl = fp.readlines()
     verts = [[]]
+    verts_t = [[]]
     ans = []
     for s in fl:
         a = s.split()
         if len(a) > 0:
             if a[0] == 'v':
                 verts.append(np.array([float(a[1]), float(a[2]), float(a[3])]))
+            elif a[0] == 'vt':
+                verts_t.append(np.array([float(a[1]), float(a[2])]))
             elif a[0] == 'f':
                 b = a[1:]
                 b = [i.split('/') for i in b]
                 ans.append(
-                    [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset, material_id])
+                    [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
+                     verts_t[int(b[0][0])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[1][0])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[2][0])] if len(verts_t) > 1 else [0.0, 0.0],
+                     material_id])
     return ans
 
 
 ##############################################################
 ##############################################################
 ##############################################################
+
+
+TEX_MEM_SIZE = 1048576 * 4
+tex_mem_used = [0]
+tex_mem = np.array([[0, 0, 0] for i in range(TEX_MEM_SIZE)], dtype=np.float32)
+
+
+def texAlloc(tex_mem, im_filename, used_):
+    used = used_[0]
+    im = plt.imread(im_filename)
+    im = np.array(im)
+    if len(im.shape) == 2:
+        im = np.tile(np.expand_dims(im, 2), (1, 1, 3))
+    sz = im.shape[0]*im.shape[1]
+    tex_mem[used: used+sz] = im.reshape((-1, 3)) / 255.0
+    used += sz
+    used_[0] = used
+    return used-sz, im.shape[0], im.shape[1]
+
+
+textures_filename = [
+    "assets/ground.jfif"
+]
+
+N_TEXTURE = len(textures_filename)
+
+textures_desc = [texAlloc(tex_mem, i, tex_mem_used) for i in textures_filename]
+
+tex_mem_ti = ti.Vector.field(3, ti.f32, (TEX_MEM_SIZE))
+tex_desc_ti = ti.Vector.field(3, ti.i32, (N_TEXTURE))
+tex_mem_ti.from_numpy(tex_mem)
+tex_desc_ti.from_numpy(np.array(textures_desc))
+
+@ti.func
+def getTexPixel(tex_id, x, y):
+    # * x,y must be integer
+    tex_addr = tex_desc_ti[tex_id][0]
+    h = tex_desc_ti[tex_id][1]
+    w = tex_desc_ti[tex_id][2]
+    x = min(x, w-1)
+    x = max(x, 0)
+    y = min(y, h-1)
+    y = max(y, 0)
+    return tex_mem_ti[tex_addr+w*y+x]
+
+@ti.func
+def getTexPixelBI(tex_id, x, y):
+    # * x,y can be float
+    x0 = ti.cast(ti.floor(x), ti.int32)
+    y0 = ti.cast(ti.floor(y), ti.int32)
+    x1, y1 = x0 + 1, y0 + 1
+    return getTexPixel(tex_id, x0, y0) * (x1-x) * (y1-y) + getTexPixel(tex_id, x0, y1) * (x1-x) * (y-y0) + \
+            getTexPixel(tex_id, x1, y0) * (x-x0) * (y1-y) + getTexPixel(tex_id, x1, y1) * (x-x0) * (y-y0)
+
+@ti.func
+def getTexColorBI(tex_id, u, v):
+    ans = ti.Vector([1., 1., 1.])
+    if tex_id >=0:
+        h = tex_desc_ti[tex_id][1]
+        w = tex_desc_ti[tex_id][2]
+        ans = getTexPixelBI(tex_id, u*w, v*h)
+    return ans
 
 
 scene = []
@@ -193,7 +261,8 @@ scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
 scene += readObject('assets/bunny.obj', 5, offset=[0, -1, -1], scale=10)
 scene += readObject('assets/bunny.obj', 6, offset=[0, -1, 1], scale=10)
 
-scene_material_id = [i[3] for i in scene]
+scene_material_id = [i[6] for i in scene]
+scene_uv = [i[3:6] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
     [[0, 0, 0], [10, 10, 10], [0, 0, 0], [0, 0, 0]],
@@ -204,9 +273,24 @@ matattrs = [
     [[1, 0.3, 0.3], [0.6, 0.5, 0.2], [0, 0, 0], [0, 0, 0]],
     [[1, 0.9, 0.2], [0.6 * 2, 0.5 * 2, 0.2 * 2], [0, 0, 0], [0, 0, 0]],
 ]
+
+matattri = [
+    [-1],
+    [0],
+    [-1],
+    [-1],
+    [-1],
+    [-1],
+    [-1],
+]
+
+
 mesh_desc = np.array(scene)
+mesh_uv_desc = np.array(scene_uv)
+print(mesh_uv_desc.shape)
 mesh_material_desc = np.array(scene_material_id)
 matattrs_np = np.array(matattrs, dtype=np.float32)
+matattri_np = np.array(matattri, dtype=np.float32)
 light_tids = [(i, norm(np.cross(mesh_desc[i][1]-mesh_desc[i][0], mesh_desc[i][2]-mesh_desc[i][0])))
               for i in range(len(scene)) if matattrs[scene_material_id[i]][0][0] in [0]]  # Emitting material ids here
 sum_light_area = sum(i[1] for i in light_tids)
@@ -223,12 +307,14 @@ N_TRIANGLES = len(mesh_desc)
 IMG_HEIGHT = IMG_WIDTH = 512
 WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
-N_MATERIALS = 100
+N_MATERIALS = 7
 N_BVH_NODES = bvh_desc[0]
 
 mesh_vertices = ti.Vector.field(3, ti.f32, (N_TRIANGLES, 3))
+mesh_uvcoords = ti.Vector.field(2, ti.f32, (N_TRIANGLES, 3))
 mesh_material_id = ti.field(ti.i32, (N_TRIANGLES))
 material_attributes = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
+material_exattr = ti.field(ti.i32, (N_MATERIALS, 1))
 
 img = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))
 cam_pos = ti.Vector.field(3, ti.f32, ())
@@ -251,8 +337,10 @@ bvhim_result = ti.field(ti.i32, (IMG_HEIGHT * WIDTH_DIV, 200))
 bvh_int_cnt = ti.field(ti.f32, (4))
 
 mesh_vertices.from_numpy(mesh_desc)
+mesh_uvcoords.from_numpy(mesh_uv_desc)
 mesh_material_id.from_numpy(mesh_material_desc)
 material_attributes.from_numpy(matattrs_np)
+material_exattr.from_numpy(matattri_np)
 cam_pos .from_numpy(np.array([0., 0.1, 0.15]))
 cam_gaze .from_numpy(np.array([0., 0., -1]))
 cam_top .from_numpy(np.array([0., 1, 0]))
@@ -448,8 +536,8 @@ def ggx_d(a, i, o, n):
     h = (i+o).normalized()
     nh = ti.acos(n.dot(h))
     x = a / ti.pow(ti.cos(nh), 2) / (a*a + ti.pow(ti.tan(nh), 2))
-    # return 1.0 
-    return 1.0 / 3.14159 * x * x 
+    # return 1.0
+    return 1.0 / 3.14159 * x * x
 
 
 @ti.func
@@ -480,7 +568,7 @@ def microfacet_brdf(ad, ag, i, o, n):
 
 @ti.kernel
 def render():
-    SPP = 1000
+    SPP = 4
     WIDTH_SEG = IMG_WIDTH // WIDTH_DIV
     for thread_id in range(IMG_HEIGHT * WIDTH_DIV):
         y = thread_id // WIDTH_DIV
@@ -508,9 +596,17 @@ def render():
                         p0 = mesh_vertices[triangle_id, 0]
                         p1 = mesh_vertices[triangle_id, 1]
                         p2 = mesh_vertices[triangle_id, 2]
+                        uv0 = mesh_uvcoords[triangle_id, 0]
+                        uv1 = mesh_uvcoords[triangle_id, 1]
+                        uv2 = mesh_uvcoords[triangle_id, 2]
+                        uv = (1-bc1-bc2)*uv0 + bc1*uv1 + bc2*uv2
+                        u = uv[0]
+                        v = uv[1]
                         material_id = mesh_material_id[triangle_id]
                         material_type_id = material_attributes[material_id, 0][0]
                         normal = (p1-p0).cross(p2-p0).normalized()
+                        tex_id = material_exattr[material_id,0]
+                        tex_color = getTexColorBI(tex_id,u,v)
                         if normal.dot(-dir) > 0:
                             # Implement different materials here
                             if material_type_id == 0:
@@ -535,7 +631,7 @@ def render():
                                     (light_pos-hit_pos).normalized(),
                                     -dir,
                                     normal
-                                )
+                                ) * tex_color
 
                                 if checkVisibility(hit_pos, light_pos, thread_id) and light_normal.dot(hit_pos-light_pos) > 0:
                                     ans += coef * brdf_1 * normal.dot((light_pos-hit_pos).normalized()) * material_attributes[mesh_material_id[light_tid], 1] * \
@@ -543,7 +639,7 @@ def render():
                                             (hit_pos-light_pos).normalized()) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area
 
                                 light_source_visible = False
-                                
+
                                 wi = sample_brdf(normal)
 
                                 brdf = material_attributes[material_id, 1] / 3.14159 * microfacet_brdf(
@@ -552,7 +648,7 @@ def render():
                                     wi,
                                     -dir,
                                     normal
-                                )
+                                ) * tex_color
 
                                 coef *= brdf * 3.14159
                                 orig = hit_pos + wi * 1e-4
@@ -611,7 +707,7 @@ while True:
     if frame_id % 10 == 0:
         print("time usage:", tm()-stt, " able fps:", 1. /
               (tm()-stt+1e-9), "   #triangles", len(mesh_desc))
-        print("average BVH nodes: ", bvh_int_cnt[1] / bvh_int_cnt[0],
-              " max", bvh_int_cnt[2], " maxobj", bvh_int_cnt[3])
+        # print("average BVH nodes visited: ", bvh_int_cnt[1] / bvh_int_cnt[0],
+        #       " max_visited", bvh_int_cnt[2], " max_candidates", bvh_int_cnt[3])
 
     frame_id += 10
