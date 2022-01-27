@@ -1,5 +1,6 @@
 # Path Trace (full version)
 #   sample mesh light, bvh, microfacet, texture
+# TODO check microfacet and fix it
 
 from importlib_metadata import itertools
 import numpy as np

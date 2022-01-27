@@ -1,2 +1,3 @@
 taichi_examples
 *.pyc
+.VSCodeCounter
