@@ -215,6 +215,7 @@ tex_desc_ti = ti.Vector.field(3, ti.i32, (N_TEXTURE))
 tex_mem_ti.from_numpy(tex_mem)
 tex_desc_ti.from_numpy(np.array(textures_desc))
 
+
 @ti.func
 def getTexPixel(tex_id, x, y):
     # * x,y must be integer
@@ -227,6 +228,7 @@ def getTexPixel(tex_id, x, y):
     y = max(y, 0)
     return tex_mem_ti[tex_addr+w*y+x]
 
+
 @ti.func
 def getTexPixelBI(tex_id, x, y):
     # * x,y can be float
@@ -234,12 +236,14 @@ def getTexPixelBI(tex_id, x, y):
     y0 = ti.cast(ti.floor(y), ti.int32)
     x1, y1 = x0 + 1, y0 + 1
     return getTexPixel(tex_id, x0, y0) * (x1-x) * (y1-y) + getTexPixel(tex_id, x0, y1) * (x1-x) * (y-y0) + \
-            getTexPixel(tex_id, x1, y0) * (x-x0) * (y1-y) + getTexPixel(tex_id, x1, y1) * (x-x0) * (y-y0)
+        getTexPixel(tex_id, x1, y0) * (x-x0) * (y1-y) + \
+        getTexPixel(tex_id, x1, y1) * (x-x0) * (y-y0)
+
 
 @ti.func
 def getTexColorBI(tex_id, u, v):
     ans = ti.Vector([1., 1., 1.])
-    if tex_id >=0:
+    if tex_id >= 0:
         h = tex_desc_ti[tex_id][1]
         w = tex_desc_ti[tex_id][2]
         ans = getTexPixelBI(tex_id, u*w, v*h)
@@ -251,11 +255,11 @@ scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
 scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
-scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=7)
-scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, -8], scale=2)
-scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, 8], scale=2)
-scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, -8], scale=2)
-scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, 8], scale=2)
+scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=2)
+# scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, -8], scale=2)
+# scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, 8], scale=2)
+# scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, -8], scale=2)
+# scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, 8], scale=2)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
 scene += readObject('assets/bunny.obj', 5, offset=[0, -1, -1], scale=10)
@@ -265,11 +269,11 @@ scene_material_id = [i[6] for i in scene]
 scene_uv = [i[3:6] for i in scene]
 scene = [i[:3] for i in scene]
 matattrs = [
-    [[0, 0, 0], [10, 10, 10], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 0.9], [0.4, 0.4, 0.4], [0, 0, 0], [0, 0, 0]],
+    [[0, 0, 0], [100, 100, 100], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 3.9], [0.8, 0.8, 0.8], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 0.9], [0.7, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 0.9], [0.0, 0.0, 0.7], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 3.9], [1.0, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 3.9], [0.0, 0.0, 1.0], [0, 0, 0], [0, 0, 0]],
     [[1, 0.3, 0.3], [0.6, 0.5, 0.2], [0, 0, 0], [0, 0, 0]],
     [[1, 0.9, 0.2], [0.6 * 2, 0.5 * 2, 0.2 * 2], [0, 0, 0], [0, 0, 0]],
 ]
@@ -304,7 +308,7 @@ N_LIGHT_TRIANGLES = len(light_sampler_cdf)
 bvh_desc = buildBVH(mesh_desc)
 
 N_TRIANGLES = len(mesh_desc)
-IMG_HEIGHT = IMG_WIDTH = 512
+IMG_HEIGHT = IMG_WIDTH = 256
 WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
 N_MATERIALS = 7
@@ -316,7 +320,9 @@ mesh_material_id = ti.field(ti.i32, (N_TRIANGLES))
 material_attributes = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
 material_exattr = ti.field(ti.i32, (N_MATERIALS, 1))
 
-img = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))
+img = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))       # original
+img_acc = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))  # accumulated
+img_disp = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))  # post-processed
 cam_pos = ti.Vector.field(3, ti.f32, ())
 cam_gaze = ti.Vector.field(3, ti.f32, ())
 cam_top = ti.Vector.field(3, ti.f32, ())
@@ -341,7 +347,7 @@ mesh_uvcoords.from_numpy(mesh_uv_desc)
 mesh_material_id.from_numpy(mesh_material_desc)
 material_attributes.from_numpy(matattrs_np)
 material_exattr.from_numpy(matattri_np)
-cam_pos .from_numpy(np.array([0., 0.1, 0.15]))
+cam_pos .from_numpy(np.array([0.0, 0.0, 5.0]))
 cam_gaze .from_numpy(np.array([0., 0., -1]))
 cam_top .from_numpy(np.array([0., 1, 0]))
 clip_n .from_numpy(np.array(CLIP_N))
@@ -568,7 +574,7 @@ def microfacet_brdf(ad, ag, i, o, n):
 
 @ti.kernel
 def render():
-    SPP = 4
+    SPP = 1
     WIDTH_SEG = IMG_WIDTH // WIDTH_DIV
     for thread_id in range(IMG_HEIGHT * WIDTH_DIV):
         y = thread_id // WIDTH_DIV
@@ -605,8 +611,8 @@ def render():
                         material_id = mesh_material_id[triangle_id]
                         material_type_id = material_attributes[material_id, 0][0]
                         normal = (p1-p0).cross(p2-p0).normalized()
-                        tex_id = material_exattr[material_id,0]
-                        tex_color = getTexColorBI(tex_id,u,v)
+                        tex_id = material_exattr[material_id, 0]
+                        tex_color = getTexColorBI(tex_id, u, v)
                         if normal.dot(-dir) > 0:
                             # Implement different materials here
                             if material_type_id == 0:
@@ -670,44 +676,92 @@ def render():
             img[x, y] = ti.pow(tans / SPP, 1.0)
 
 
-gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
-frame_id = 500
 
-ina_r = 3.0
-ina_h = 0.0
+@ti.kernel
+def post_process(ndiv: ti.i32):
+    for y in range(IMG_HEIGHT):
+        for x in range(IMG_WIDTH):
+            if ndiv==1:
+                img_acc[x,y] = img[x,y]
+            else:
+                img_acc[x,y] += img[x,y]
+            img_disp[x,y]=img_acc[x,y] / ndiv
+
+gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
+frame_id = 0
+
+camera_pos = np.array([0.0, 0.0, 5.0])
+camera_gaze = np.array([0.0, 0.0, -1.0])
+camera_handle = np.cross(camera_gaze, np.array([0., 1., 0]))
+camera_top = np.cross(camera_handle, camera_gaze)
+camera_top /= norm(camera_top)
+
+last_camera_gaze = camera_gaze
+
+acc_frame_count = 0
+
 
 while True:
     stt = tm()
+
     if gui.get_event(ti.GUI.PRESS):
         if gui.event.key in [ti.GUI.ESCAPE, ti.GUI.EXIT]:
             break
     if gui.is_pressed(ti.GUI.LEFT, 'a'):
-        ina_r -= 0.1
+        camera_pos -= 0.10 * camera_handle
+        acc_frame_count = 0
     if gui.is_pressed(ti.GUI.RIGHT, 'd'):
-        ina_r += 0.1
+        camera_pos += 0.10 * camera_handle
+        acc_frame_count = 0
     if gui.is_pressed(ti.GUI.UP, 'w'):
-        ina_h += 0.1
+        camera_pos += 0.10 * camera_gaze
+        acc_frame_count = 0
     if gui.is_pressed(ti.GUI.DOWN, 's'):
-        ina_h -= 0.1
+        camera_pos -= 0.10 * camera_gaze
+        acc_frame_count = 0
+    if gui.is_pressed('p'):
+        camera_pos += 0.10 * camera_top
+        acc_frame_count = 0
+    if gui.is_pressed('l'):
+        camera_pos -= 0.10 * camera_top
+        acc_frame_count = 0
 
-    cam_pos .from_numpy(
-        np.array([ina_r*ti.cos(frame_id * 0.02), ina_h, ina_r*ti.sin(frame_id * 0.02)]))
-    cam_gaze[None] = -cam_pos[None]
-    cam_gaze[None] = cam_gaze[None].normalized()
+    gui.get_event(ti.GUI.MOTION)
+    cx, cy = gui.get_cursor_pos()
+    phi, theta = - cx * 6.28 + 3.14, cy * 3.14 - 1.57
+
+    camera_gaze = np.array([[np.cos(phi), 0, np.sin(phi)], [0, 1, 0], [-np.sin(phi), 0, np.cos(phi)]]) @ \
+        np.array([[1, 0, 0], [0, np.cos(theta), -np.sin(theta)],
+                 [0, np.sin(theta), np.cos(theta)]]) @ np.array([0., 0., -1.])
+    camera_handle = np.cross(camera_gaze, np.array([0., 1., 0]))
+    camera_top = np.cross(camera_handle, camera_gaze)
+    camera_top /= norm(camera_top)
+
+    if camera_gaze[0] != last_camera_gaze[0] and camera_gaze[1] != last_camera_gaze[1] and camera_gaze[2] != last_camera_gaze[2]:
+        acc_frame_count = 0
+
+    last_camera_gaze = camera_gaze
 
     bvh_int_cnt[0] = 1e-6
     bvh_int_cnt[1] = 0
     bvh_int_cnt[2] = 0
     bvh_int_cnt[3] = 0
 
+    cam_pos.from_numpy(camera_pos)
+    cam_gaze.from_numpy(camera_gaze)
+    cam_top.from_numpy(camera_top)
+
+    acc_frame_count += 1
     render()
     ti.sync()
-    gui.set_image(img)
+    post_process(acc_frame_count)
+    ti.sync()
+    gui.set_image(img_disp)
     gui.show()
-    if frame_id % 10 == 0:
-        print("time usage:", tm()-stt, " able fps:", 1. /
-              (tm()-stt+1e-9), "   #triangles", len(mesh_desc))
-        # print("average BVH nodes visited: ", bvh_int_cnt[1] / bvh_int_cnt[0],
-        #       " max_visited", bvh_int_cnt[2], " max_candidates", bvh_int_cnt[3])
+    # if frame_id % 10 == 0:
+    #     print("time usage:", tm()-stt, " able fps:", 1. /
+    #           (tm()-stt+1e-9), "   #triangles", len(mesh_desc))
+    # print("average BVH nodes visited: ", bvh_int_cnt[1] / bvh_int_cnt[0],
+    #       " max_visited", bvh_int_cnt[2], " max_candidates", bvh_int_cnt[3])
 
-    frame_id += 10
+    frame_id += 1
