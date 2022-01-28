@@ -12,7 +12,7 @@ cv2.namedWindow('frame')
 capture = cv2.VideoCapture(0)
 fc = 0
 WND_SIZE = 64
-THRES = 15
+THRES = 12
 THRES__ = 16
 x1, y1, x2, y2 = 0, 0, 500, 0
 

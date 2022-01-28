@@ -257,10 +257,6 @@ scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
 scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
 scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=2)
-# scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, -8], scale=2)
-# scene += readObject('assets/test_r.obj', 0, offset=[-8, -9.9, 8], scale=2)
-# scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, -8], scale=2)
-# scene += readObject('assets/test_r.obj', 0, offset=[8, -9.9, 8], scale=2)
 scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
 scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
 scene += readObject('assets/bunny.obj', 5, offset=[0, -1, -1], scale=10)
@@ -273,8 +269,8 @@ matattrs = [
     [[0, 0, 0], [100, 100, 100], [0, 0, 0], [0, 0, 0]],
     [[1, 0.9, 3.9], [0.8, 0.8, 0.8], [0, 0, 0], [0, 0, 0]],
     [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 3.9], [1.0, 0.0, 0.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 3.9], [0.0, 0.0, 1.0], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 3.9], [0.8, 0.2, 0.3], [0, 0, 0], [0, 0, 0]],
+    [[1, 0.9, 3.9], [0.3, 0.2, 0.8], [0, 0, 0], [0, 0, 0]],
     [[1, 0.3, 0.3], [0.6, 0.5, 0.2], [0, 0, 0], [0, 0, 0]],
     [[1, 0.9, 0.2], [0.6 * 2, 0.5 * 2, 0.2 * 2], [0, 0, 0], [0, 0, 0]],
 ]
@@ -312,7 +308,7 @@ N_TRIANGLES = len(mesh_desc)
 IMG_HEIGHT = IMG_WIDTH = 256
 WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
-N_MATERIALS = 7
+N_MATERIALS = len(matattri)
 N_BVH_NODES = bvh_desc[0]
 
 mesh_vertices = ti.Vector.field(3, ti.f32, (N_TRIANGLES, 3))
@@ -649,7 +645,7 @@ def render():
 
                                 wi = sample_brdf(normal)
 
-                                brdf = material_attributes[material_id, 1] / 3.14159 * microfacet_brdf(
+                                brdf = material_attributes[material_id, 1] * microfacet_brdf(
                                     material_attributes[material_id, 0][1],
                                     material_attributes[material_id, 0][2],
                                     wi,
@@ -738,7 +734,7 @@ while True:
     camera_top = np.cross(camera_handle, camera_gaze)
     camera_top /= norm(camera_top)
 
-    if camera_gaze[0] != last_camera_gaze[0] and camera_gaze[1] != last_camera_gaze[1] and camera_gaze[2] != last_camera_gaze[2]:
+    if norm(np.array(camera_gaze)-np.array(last_camera_gaze)) > 0.0001:
         acc_frame_count = 0
 
     last_camera_gaze = camera_gaze
@@ -753,6 +749,7 @@ while True:
     cam_top.from_numpy(camera_top)
 
     acc_frame_count += 1
+    ti.sync()
     render()
     ti.sync()
     post_process(acc_frame_count)
