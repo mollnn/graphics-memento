@@ -1,3 +1,4 @@
 taichi_examples
 *.pyc
 .VSCodeCounter
+cv_counter.py
