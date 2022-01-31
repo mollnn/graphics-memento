@@ -5,20 +5,118 @@ import random
 import math
 from numpy.linalg.linalg import norm
 import time
+import os
 
 ti.init(arch=ti.cuda, debug=False)
 
+# Textures
 
-def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
+TEX_MEM_SIZE = 1048576 * 8
+tex_mem_used = [0]
+tex_mem = np.array([[0, 0, 0] for i in range(TEX_MEM_SIZE)], dtype=np.float32)
+
+
+def texAlloc(tex_mem, im_filename, used_):
+    used = used_[0]
+    im = plt.imread(im_filename)
+    im = np.array(im, dtype=np.float32)
+    if np.max(im) > 1.0:
+        im /= 255.0
+    if len(im.shape) == 2:
+        im = np.tile(np.expand_dims(im, 2), (1, 1, 3))
+    sz = im.shape[0]*im.shape[1]
+    tex_mem[used: used+sz] = im.reshape((-1, 3))
+    used += sz
+    used_[0] = used
+    return used-sz, im.shape[0], im.shape[1]
+
+
+textures_filename = [
+]
+
+
+# Material
+
+
+material_attr_vec = [
+    [[0.1,0.1,0.1], [0.5,0.5,0.5], [0,0,0], [1,0,0]]
+]
+
+material_attr_int = [
+    [0,-1]
+]
+
+material_dict = {
+    "default": 0
+}
+
+mtl_file_memento = []
+
+
+# Ai: [illum model, tex1, tex2, ...]
+# Av For Blinn-Phong: [Ka, Kd, Ks, [Ns, 0, 0]]
+
+
+def readMaterial(filename):
+    print(os.path.split(filename))
+    (filepath,_) = os.path.split(filename)
+    if filename in mtl_file_memento:
+        return
+    mtl_file_memento.append(filename)
+    fp = open(filename, 'r')
+    fl = fp.readlines()
+    mtl_vec = []
+    mtl_int = []
+    mtl_id=-1
+    for s in fl:
+        a = s.split()
+        if len(a)>0:
+            if a[0] == 'newmtl':
+                if mtl_vec != []:
+                    material_attr_vec.append(mtl_vec)
+                    material_attr_int.append(mtl_int)
+                mtl_vec=[[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+                mtl_int=[0,-1]
+                mtl_name = filename + "::" + a[1]
+                mtl_id=len(material_attr_vec)
+                material_dict[mtl_name] = mtl_id
+            elif a[0] == 'Ka':
+                mtl_vec[0]=list(map(float,a[1:4]))
+            elif a[0] == 'Kd':
+                mtl_vec[1]=list(map(float,a[1:4]))
+            elif a[0] == 'Ks':
+                mtl_vec[2]=list(map(float,a[1:4]))
+            elif a[0] == 'Ns':
+                mtl_vec[3][0]=float(a[1])
+            elif a[0] == 'map_Kd':
+                a[1] = filepath + '/' + a[1]
+                if a[1] not in textures_filename: textures_filename.append(a[1])
+                mtl_int[1]=textures_filename.index(a[1])
+    if mtl_vec != []:
+        material_attr_vec.append(mtl_vec)
+        material_attr_int.append(mtl_int)
+
+
+def readObject(filename, offset=[0, 0, 0], scale=1):
+    print(os.path.split(filename))
+    (filepath,_)  = os.path.split(filename)
     fp = open(filename, 'r')
     fl = fp.readlines()
     verts = [[]]
     verts_t = [[]]
     ans = []
+    mtl_filename = ""
+    mtl_id = 0
     for s in fl:
         a = s.split()
         if len(a) > 0:
-            if a[0] == 'v':
+            if a[0]=='mtllib':
+                mtl_filename = filepath + '/' + a[1]
+                readMaterial(mtl_filename)
+            elif a[0]=='usemtl':
+                mtl_name = mtl_filename+"::"+a[1]
+                mtl_id = material_dict[mtl_name]
+            elif a[0] == 'v':
                 verts.append(np.array([float(a[1]), float(a[2]), float(a[3])]))
             elif a[0] == 'vt':
                 verts_t.append(np.array([float(a[1]), float(a[2])]))
@@ -30,7 +128,7 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
                      verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
                      verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
                      verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                     material_id])
+                     mtl_id])
     return ans
 
 
@@ -41,8 +139,8 @@ def normalized(x):
 # Scene
 
 scene = []
-scene += readObject('assets/spot.obj', 0, offset=[0, 1, 0], scale=1)
-scene += readObject('assets/cube.obj', 1, offset=[0, -1, 0], scale=1)
+scene += readObject('assets/spot.obj',  offset=[0, 1, 0], scale=1)
+scene += readObject('assets/cube.obj',  offset=[0, -1, 0], scale=1)
 
 
 scene_vertices = np.array([i[:3] for i in scene])
@@ -59,6 +157,26 @@ scene_vertices_dev.from_numpy(scene_vertices)
 scene_uvcoords_dev.from_numpy(scene_uvcoords)
 scene_material_dev.from_numpy(scene_material)
 
+
+# Commit Texture
+
+N_TEXTURE = len(textures_filename)
+
+textures_desc = [texAlloc(tex_mem, i, tex_mem_used) for i in textures_filename]
+
+tex_mem_dev = ti.Vector.field(3, ti.f32, (TEX_MEM_SIZE))
+tex_desc_dev = ti.Vector.field(3, ti.i32, (N_TEXTURE))
+tex_mem_dev.from_numpy(tex_mem)
+tex_desc_dev.from_numpy(np.array(textures_desc))
+
+
+# Commit Material
+
+N_MATERIALS = len(material_attr_int)
+material_attr_vec_dev = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
+material_attr_vec_dev.from_numpy(np.array(material_attr_vec, np.float32))
+material_attr_int_dev = ti.field(ti.i32, (N_MATERIALS, 2))
+material_attr_int_dev.from_numpy(np.array(material_attr_int, np.int32))
 
 # Camera
 
@@ -133,64 +251,6 @@ light_int_dev = ti.Vector.field(3, ti.f32, [])
 light_pos_dev.from_numpy(light_pos)
 light_int_dev.from_numpy(light_int)
 
-# Material
-
-N_MATERIALS = 2
-
-material_attr_vec = [
-    [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0, 0, 0], [10.0, 0.0, 0.0]],
-    [[0.1,0.1,0.2], [1.0, 1.0, 1.0], [0.1,0.1,0.1], [10.0, 0.0, 0.0]]
-]
-material_attr_vec_dev = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
-material_attr_vec_dev.from_numpy(np.array(material_attr_vec, np.float32))
-
-material_attr_int = [
-    [0, 0],
-    [0, 1]
-]
-material_attr_int_dev = ti.field(ti.i32, (N_MATERIALS, 2))
-material_attr_int_dev.from_numpy(np.array(material_attr_int, np.int32))
-
-# Ai: [illum model, tex1, tex2, ...]
-# Av For Blinn-Phong: [Ka, Kd, Ks, [Ns, 0, 0]]
-
-
-# Textures
-
-TEX_MEM_SIZE = 1048576 * 4
-tex_mem_used = [0]
-tex_mem = np.array([[0, 0, 0] for i in range(TEX_MEM_SIZE)], dtype=np.float32)
-
-
-def texAlloc(tex_mem, im_filename, used_):
-    used = used_[0]
-    im = plt.imread(im_filename)
-    im = np.array(im, dtype=np.float32)
-    if np.max(im)>1.0:
-        im /= 255.0
-    if len(im.shape) == 2:
-        im = np.tile(np.expand_dims(im, 2), (1, 1, 3))
-    sz = im.shape[0]*im.shape[1]
-    tex_mem[used: used+sz] = im.reshape((-1, 3))
-    used += sz
-    used_[0] = used
-    return used-sz, im.shape[0], im.shape[1]
-
-
-textures_filename = [
-    "assets/spot.png",
-    "assets/ground.jpg"
-]
-
-N_TEXTURE = len(textures_filename)
-
-textures_desc = [texAlloc(tex_mem, i, tex_mem_used) for i in textures_filename]
-
-tex_mem_dev = ti.Vector.field(3, ti.f32, (TEX_MEM_SIZE))
-tex_desc_dev = ti.Vector.field(3, ti.i32, (N_TEXTURE))
-tex_mem_dev.from_numpy(tex_mem)
-tex_desc_dev.from_numpy(np.array(textures_desc))
-
 
 @ti.func
 def getTexPixel(tex_id, x, y):
@@ -248,13 +308,15 @@ def fragmentShader(u, v, P, n, Wo, material_id, Pl, Il):
     # Only support Blinn-Phong now
     illum_mode = material_attr_int_dev[material_id, 0]
     tex1 = material_attr_int_dev[material_id, 1]
-    tex1_color = ti.Vector([1.0,1.0,1.0]) if tex1==-1 else getTexColorBI(tex1, u, v)
+    tex1_color = ti.Vector([1.0, 1.0, 1.0]) if tex1 == - \
+        1 else getTexColorBI(tex1, u, v)
     Ka = material_attr_vec_dev[material_id, 0]
     Kd = material_attr_vec_dev[material_id, 1]
+    if tex1 != -1: Kd = tex1_color
     Ks = material_attr_vec_dev[material_id, 2]
     Ns = material_attr_vec_dev[material_id, 3][0]
     result_ambient = Ka
-    result_diffuse = Kd * tex1_color * Il / (Pl - P).dot(Pl - P) * \
+    result_diffuse = Kd * Il / (Pl - P).dot(Pl - P) * \
         max(0, n.dot((Pl-P).normalized()))
     h = ((Pl-P).normalized() + Wo).normalized()
     result_specular = Ks * Il / \
@@ -291,8 +353,9 @@ def interpV(p0, p1, p2, x, y, z0, z1, z2, v0, v1, v2):
 
 
 @ti.func
-def fmod(x,y):
+def fmod(x, y):
     return x-int(x/y)*y
+
 
 @ti.kernel
 def render():
@@ -315,7 +378,8 @@ def render():
             p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
             p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
             p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
-            uv0, uv1, uv2 = scene_uvcoords_dev[i,0],scene_uvcoords_dev[i,1],scene_uvcoords_dev[i,2]
+            uv0, uv1, uv2 = scene_uvcoords_dev[i,
+                                               0], scene_uvcoords_dev[i, 1], scene_uvcoords_dev[i, 2]
             p0_ss = ti.Vector(
                 [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
             p1_ss = ti.Vector(
@@ -324,15 +388,15 @@ def render():
                 [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
             p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
             z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
-                           p0_vs[2], p1_vs[2], p2_vs[2])
+                            p0_vs[2], p1_vs[2], p2_vs[2])
             x_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
                            p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[0], p1_vs[0], p2_vs[0])
             y_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
                            p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[1], p1_vs[1], p2_vs[1])
             u = interpV(p0_ss, p1_ss, p2_ss, x, y,
-                           p0_vs[2], p1_vs[2], p2_vs[2], uv0[0], uv1[0], uv2[0])
+                        p0_vs[2], p1_vs[2], p2_vs[2], uv0[0], uv1[0], uv2[0])
             v = interpV(p0_ss, p1_ss, p2_ss, x, y,
-                           p0_vs[2], p1_vs[2], p2_vs[2], uv0[1], uv1[1], uv2[1])
+                        p0_vs[2], p1_vs[2], p2_vs[2], uv0[1], uv1[1], uv2[1])
             p_vs = ti.Vector([x_vs, y_vs, z_vs])
             p_vs4 = ti.Vector([x_vs, y_vs, z_vs, 1.0])
             p_ws4 = transform_view_dev[None].inverse() @ p_vs4
@@ -441,4 +505,3 @@ while True:
     render()
     gui.set_image(framebuffer_dev)
     gui.show()
-
