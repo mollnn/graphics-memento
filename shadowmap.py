@@ -39,11 +39,11 @@ textures_filename = [
 
 
 material_attr_vec = [
-    [[0.1,0.1,0.1], [0.5,0.5,0.5], [0,0,0], [1,0,0]]
+    [[0.1, 0.1, 0.1], [0.5, 0.5, 0.5], [0, 0, 0], [1, 0, 0]]
 ]
 
 material_attr_int = [
-    [0,-1]
+    [0, -1]
 ]
 
 material_dict = {
@@ -58,7 +58,7 @@ mtl_file_memento = []
 
 
 def readMaterial(filename):
-    (filepath,_) = os.path.split(filename)
+    (filepath, _) = os.path.split(filename)
     if filename in mtl_file_memento:
         return
     mtl_file_memento.append(filename)
@@ -66,38 +66,39 @@ def readMaterial(filename):
     fl = fp.readlines()
     mtl_vec = []
     mtl_int = []
-    mtl_id=-1
+    mtl_id = -1
     for s in fl:
         a = s.split()
-        if len(a)>0:
+        if len(a) > 0:
             if a[0] == 'newmtl':
                 if mtl_vec != []:
                     material_attr_vec.append(mtl_vec)
                     material_attr_int.append(mtl_int)
-                mtl_vec=[[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
-                mtl_int=[0,-1]
+                mtl_vec = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
+                mtl_int = [0, -1]
                 mtl_name = filename + "::" + a[1]
-                mtl_id=len(material_attr_vec)
+                mtl_id = len(material_attr_vec)
                 material_dict[mtl_name] = mtl_id
             elif a[0] == 'Ka':
-                mtl_vec[0]=list(map(float,a[1:4]))
+                mtl_vec[0] = list(map(float, a[1:4]))
             elif a[0] == 'Kd':
-                mtl_vec[1]=list(map(float,a[1:4]))
+                mtl_vec[1] = list(map(float, a[1:4]))
             elif a[0] == 'Ks':
-                mtl_vec[2]=list(map(float,a[1:4]))
+                mtl_vec[2] = list(map(float, a[1:4]))
             elif a[0] == 'Ns':
-                mtl_vec[3][0]=float(a[1])
+                mtl_vec[3][0] = float(a[1])
             elif a[0] == 'map_Kd':
                 a[1] = filepath + '/' + a[1]
-                if a[1] not in textures_filename: textures_filename.append(a[1])
-                mtl_int[1]=textures_filename.index(a[1])
+                if a[1] not in textures_filename:
+                    textures_filename.append(a[1])
+                mtl_int[1] = textures_filename.index(a[1])
     if mtl_vec != []:
         material_attr_vec.append(mtl_vec)
         material_attr_int.append(mtl_int)
 
 
 def readObject(filename, offset=[0, 0, 0], scale=1):
-    (filepath,_)  = os.path.split(filename)
+    (filepath, _) = os.path.split(filename)
     fp = open(filename, 'r')
     fl = fp.readlines()
     verts = [[]]
@@ -108,10 +109,10 @@ def readObject(filename, offset=[0, 0, 0], scale=1):
     for s in fl:
         a = s.split()
         if len(a) > 0:
-            if a[0]=='mtllib':
+            if a[0] == 'mtllib':
                 mtl_filename = filepath + '/' + a[1]
                 readMaterial(mtl_filename)
-            elif a[0]=='usemtl':
+            elif a[0] == 'usemtl':
                 mtl_name = mtl_filename+"::"+a[1]
                 mtl_id = material_dict[mtl_name]
             elif a[0] == 'v':
@@ -183,53 +184,73 @@ IMG_HEIGHT = 256
 framebuffer_dev = ti.Vector.field(3, ti.f32, (IMG_WIDTH, IMG_HEIGHT))
 framebuffer_z_dev = ti.field(ti.f32, (IMG_WIDTH, IMG_HEIGHT))
 
+
 camera_pos = np.array([0, 4, 5], dtype=np.float32)
 camera_gaze = normalized(np.array([0, -0.5, -1], dtype=np.float32))
 camera_grav = np.array([0, -1, 0], dtype=np.float32)
 camera_hand = normalized(np.cross(camera_grav, camera_gaze))
 camera_up = normalized(np.cross(camera_hand, camera_gaze))
 
-camera_pos_vec4 = np.concatenate(
-    (camera_pos, np.array([1.0], dtype=np.float32)))
-camera_gaze_vec4 = np.concatenate(
-    (camera_gaze, np.array([1.0], dtype=np.float32)))
-camera_up_vec4 = np.concatenate((camera_up, np.array([1.0], dtype=np.float32)))
-camera_hand_vec4 = np.concatenate(
-    (camera_hand, np.array([1.0], dtype=np.float32)))
 
-clip_n, clip_f, clip_l, clip_r, clip_t, clip_b = -0.2, -100, -0.1, 0.1, 0.1, -0.1
+def makeCamera(
+    camera_pos, camera_gaze, camera_up, camera_hand, fov, asp, img_w, img_h
+):
+    clip_n = -0.1
+    clip_f = -100
+    clip_l = -0.1 * math.tan(fov/2)
+    clip_r = -clip_l
+    clip_t = clip_r / asp
+    clip_b = -clip_t
+    camera_pos_vec4 = np.concatenate(
+        (camera_pos, np.array([1.0], dtype=np.float32)))
+    camera_gaze_vec4 = np.concatenate(
+        (camera_gaze, np.array([1.0], dtype=np.float32)))
+    camera_up_vec4 = np.concatenate(
+        (camera_up, np.array([1.0], dtype=np.float32)))
+    camera_hand_vec4 = np.concatenate(
+        (camera_hand, np.array([1.0], dtype=np.float32)))
 
-transform_view = np.concatenate(
-    ([camera_hand_vec4], [camera_up_vec4], [-camera_gaze_vec4], [[0, 0, 0, 1]])
-) @ (np.array([
-    [1, 0, 0, 0],
-    [0, 1, 0, 0],
-    [0, 0, 1, 0],
-    [-camera_pos[0], -camera_pos[1], -camera_pos[2], 1]
-], dtype=np.float32).T)
+    transform_view = np.concatenate(
+        ([camera_hand_vec4], [camera_up_vec4],
+         [-camera_gaze_vec4], [[0, 0, 0, 1]])
+    ) @ (np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [-camera_pos[0], -camera_pos[1], -camera_pos[2], 1]
+    ], dtype=np.float32).T)
 
-transform_proj = np.array([
-    [2/(clip_r-clip_l), 0, 0, 0],
-    [0, 2/(clip_t-clip_b), 0, 0],
-    [0, 0, 2/(clip_n-clip_f), 0],
-    [(clip_l+clip_r)/(clip_r-clip_l), (clip_t+clip_b) /
-     (clip_t-clip_b), (clip_n+clip_f)/(clip_n-clip_f), 1]
-], dtype=np.float32).T @ np.array([
-    [clip_n, 0, 0, 0],
-    [0, clip_n, 0, 0],
-    [0, 0, clip_n+clip_f, -clip_n*clip_f],
-    [0, 0, 1, 0]
-], dtype=np.float32)
+    transform_proj = np.array([
+        [2/(clip_r-clip_l), 0, 0, 0],
+        [0, 2/(clip_t-clip_b), 0, 0],
+        [0, 0, 2/(clip_n-clip_f), 0],
+        [(clip_l+clip_r)/(clip_r-clip_l), (clip_t+clip_b) /
+         (clip_t-clip_b), (clip_n+clip_f)/(clip_n-clip_f), 1]
+    ], dtype=np.float32).T @ np.array([
+        [clip_n, 0, 0, 0],
+        [0, clip_n, 0, 0],
+        [0, 0, clip_n+clip_f, -clip_n*clip_f],
+        [0, 0, 1, 0]
+    ], dtype=np.float32)
 
-transform_viewport = np.array([
-    [IMG_WIDTH / 2, 0, 0, IMG_WIDTH/2],
-    [0, IMG_HEIGHT/2, 0, IMG_HEIGHT/2],
-    [0, 0, 1, 0],
-    [0, 0, 0, 1]
-])
+    transform_viewport = np.array([
+        [img_w / 2, 0, 0, img_w/2],
+        [0, img_h/2, 0, img_h/2],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ])
 
-transform = transform_viewport @ transform_proj @ transform_view
-light_dir = normalized(np.array([-1., 1., 1.]))
+    transform = transform_viewport @ transform_proj @ transform_view
+
+    return transform, transform_view
+
+
+fov = 90 / 180 * 3.14159
+asp = 1.0
+
+transform, transform_view = makeCamera(
+    camera_pos, camera_gaze, camera_up, camera_hand, fov, asp, IMG_WIDTH, IMG_HEIGHT
+)
 
 transform_dev = ti.Matrix.field(4, 4, ti.f32, [])
 transform_dev.from_numpy(transform)
@@ -240,13 +261,46 @@ transform_view_dev.from_numpy(transform_view)
 camera_pos_dev = ti.Vector.field(3, ti.f32, [])
 
 # Lighting
-light_pos = np.array([[6, 6, 6], [3, 0, 0]], dtype=np.float32)
-light_int = np.array([[100, 100, 100], [10, 7, 0.0]], dtype=np.float32) 
+light_pos = np.array([[6, 6, 6], [0, 5, 0]], dtype=np.float32)
+light_int = np.array([[100, 100, 100], [10, 10, 10]], dtype=np.float32)
 N_LIGHT = light_pos.shape[0]
 light_pos_dev = ti.Vector.field(3, ti.f32, [N_LIGHT])
 light_int_dev = ti.Vector.field(3, ti.f32, [N_LIGHT])
 light_pos_dev.from_numpy(light_pos)
 light_int_dev.from_numpy(light_int)
+
+# !! SHADOW MAPPING
+# * Only one map now, for the first light source
+
+SMAP_SIZE = 512
+smap_dev = ti.field(ti.f32, (SMAP_SIZE, SMAP_SIZE))
+
+smap_pos = np.array(light_pos[0], dtype=np.float32)
+smap_gaze = np.array([0, -1, 0], dtype=np.float32)
+smap_grav = np.array([0, 0, -1], dtype=np.float32)
+smap_hand = normalized(np.cross(smap_grav, smap_gaze))
+smap_up = normalized(np.cross(smap_hand, smap_gaze))
+smap_fov = 2.5
+smap_asp = 1.0
+
+smap_transform, smap_transform_view = makeCamera(
+    smap_pos, smap_gaze, smap_up, smap_hand, smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)
+
+smap_pos_dev = ti.Vector.field(3, ti.f32, [])
+smap_gaze_dev = ti.Vector.field(3, ti.f32, [])
+smap_grav_dev = ti.Vector.field(3, ti.f32, [])
+smap_hand_dev = ti.Vector.field(3, ti.f32, [])
+smap_up_dev = ti.Vector.field(3, ti.f32, [])
+smap_transform_dev = ti.Matrix.field(4, 4, ti.f32, [])
+smap_transform_view_dev = ti.Matrix.field(4, 4, ti.f32, [])
+
+smap_pos_dev.from_numpy(smap_pos)
+smap_gaze_dev.from_numpy(smap_gaze)
+smap_grav_dev.from_numpy(smap_grav)
+smap_hand_dev.from_numpy(smap_hand)
+smap_up_dev .from_numpy(smap_up)
+smap_transform_dev .from_numpy(smap_transform)
+smap_transform_view_dev .from_numpy(smap_transform_view)
 
 
 @ti.func
@@ -309,7 +363,8 @@ def fragmentShader(u, v, P, n, Wo, material_id, Pl, Il):
         1 else getTexColorBI(tex1, u, v)
     Ka = material_attr_vec_dev[material_id, 0]
     Kd = material_attr_vec_dev[material_id, 1]
-    if tex1 != -1: Kd = tex1_color
+    if tex1 != -1:
+        Kd = tex1_color
     Ks = material_attr_vec_dev[material_id, 2]
     Ns = material_attr_vec_dev[material_id, 3][0]
     result_ambient = Ka
@@ -352,6 +407,80 @@ def interpV(p0, p1, p2, x, y, z0, z1, z2, v0, v1, v2):
 @ti.func
 def fmod(x, y):
     return x-int(x/y)*y
+
+
+@ti.kernel
+def renderLightpass():
+    # * "camera" in this function refers to LIGHT
+    for x, y in smap_dev:
+        smap_dev[x, y] = 1e9
+    for x, y in smap_dev:
+        for i in range(n_triangles):
+            p0_ws, p1_ws, p2_ws = scene_vertices_dev[i,
+                                                     0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
+            p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
+            p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
+            p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
+            p0_vs4 = smap_transform_view_dev[None] @ p0_ws4
+            p1_vs4 = smap_transform_view_dev[None] @ p1_ws4
+            p2_vs4 = smap_transform_view_dev[None] @ p2_ws4
+            p0_ss4 = smap_transform_dev[None] @ p0_ws4
+            p1_ss4 = smap_transform_dev[None] @ p1_ws4
+            p2_ss4 = smap_transform_dev[None] @ p2_ws4
+            p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
+            p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
+            p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
+            uv0, uv1, uv2 = scene_uvcoords_dev[i,
+                                               0], scene_uvcoords_dev[i, 1], scene_uvcoords_dev[i, 2]
+            p0_ss = ti.Vector(
+                [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
+            p1_ss = ti.Vector(
+                [p1_ss4[0]/p1_ss4[3], p1_ss4[1]/p1_ss4[3], p1_ss4[2]/p1_ss4[3]])
+            p2_ss = ti.Vector(
+                [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
+            p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
+            z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
+                            p0_vs[2], p1_vs[2], p2_vs[2])
+            x_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
+                           p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[0], p1_vs[0], p2_vs[0])
+            y_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
+                           p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[1], p1_vs[1], p2_vs[1])
+            p_vs4 = ti.Vector([x_vs, y_vs, z_vs, 1.0])
+            p_ws4 = smap_transform_view_dev[None].inverse() @ p_vs4
+            p_ws = ti.Vector([p_ws4[0]/p_ws4[3], p_ws4[1] /
+                             p_ws4[3], p_ws4[2]/p_ws4[3]])
+            smap_pos = smap_pos_dev[None]
+            smap_pos_ws4 = ti.Vector(
+                [smap_pos[0], smap_pos[1], smap_pos[2], 1.0])
+            smap_pos_vs4 = smap_transform_view_dev[None] @ smap_pos_ws4
+            smap_pos_vs = ti.Vector([smap_pos_ws4[0]/smap_pos_ws4[3],
+                                      smap_pos_ws4[1]/smap_pos_ws4[3], smap_pos_ws4[2]/smap_pos_ws4[3]])
+
+            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < smap_dev[x, y] and z_vs < 0:
+                smap_dev[x, y] = -z_vs
+
+
+@ti.func
+def checkShadow(smap_transform_view, obj_pos):
+    obj_pos4 = ti.Vector([obj_pos[0], obj_pos[1], obj_pos[2], 1.0])
+    obj_pos_vs4 = smap_transform_view @ obj_pos4
+    obj_pos_vs = ti.Vector([obj_pos_vs4[0]/obj_pos_vs4[3], obj_pos_vs4[1]/obj_pos_vs4[3], obj_pos_vs4[2]/obj_pos_vs4[3]])
+    dir_vs = - obj_pos_vs / obj_pos_vs[2]
+    fx = ti.tan(smap_fov / 2) 
+    fy = fx * smap_asp
+    dx = dir_vs[0]
+    dy = dir_vs[1]
+    rx = dx / fx / 2 + 0.5
+    ry = dy / fy / 2 + 0.5
+    actual_z = -obj_pos_vs[2]
+    ans = True
+    if rx>0 and rx<1 and ry>0 and ry<1:
+        ix = int(rx*SMAP_SIZE)
+        iy = int(ry*SMAP_SIZE)
+        smap_z = smap_dev[ix, iy] 
+        if actual_z - smap_z > 1e-3:
+            ans = False
+    return ans
 
 
 @ti.kernel
@@ -406,7 +535,7 @@ def render():
             camera_pos_vs = ti.Vector([camera_pos_ws4[0]/camera_pos_ws4[3],
                                       camera_pos_ws4[1]/camera_pos_ws4[3], camera_pos_ws4[2]/camera_pos_ws4[3]])
 
-            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < clip_n:
+            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < 0:
                 answer = ti.Vector([0., 0., 0.])
                 for idx_light in range(N_LIGHT):
                     light_pos = light_pos_dev[idx_light]
@@ -415,7 +544,7 @@ def render():
                         [light_pos[0], light_pos[1], light_pos[2], 1.0])
                     light_pos_vs4 = transform_view_dev[None] @ light_pos_ws4
                     light_pos_vs = ti.Vector([light_pos_ws4[0]/light_pos_ws4[3],
-                                            light_pos_ws4[1]/light_pos_ws4[3], light_pos_ws4[2]/light_pos_ws4[3]])
+                                              light_pos_ws4[1]/light_pos_ws4[3], light_pos_ws4[2]/light_pos_ws4[3]])
                     material_id = scene_material_dev[i]
                     color = fragmentShader(
                         u, v,
@@ -426,7 +555,8 @@ def render():
                         light_pos_vs,
                         light_int
                     )
-                    answer += color
+                    if idx_light>0 or checkShadow(smap_transform_view_dev[None],p_ws):
+                        answer += color
                 framebuffer_dev[x, y] = answer
                 framebuffer_z_dev[x, y] = -z_vs
 
@@ -497,12 +627,16 @@ while True:
         [-camera_pos[0], -camera_pos[1], -camera_pos[2], 1]
     ], dtype=np.float32).T)
 
-    transform = transform_viewport @ transform_proj @ transform_view
-    light_dir = normalized(np.array([-1., 1., 1.]))
+    transform, transform_view = makeCamera(
+        camera_pos, camera_gaze, camera_up, camera_hand, fov, asp, IMG_WIDTH, IMG_HEIGHT
+    )
 
     transform_dev.from_numpy(transform)
     transform_view_dev.from_numpy(transform_view)
 
+    renderLightpass()
     render()
+
     gui.set_image(framebuffer_dev)
+
     gui.show()
