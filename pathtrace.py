@@ -173,9 +173,9 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
                 b = [i.split('/') for i in b]
                 ans.append(
                     [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
-                     verts_t[int(b[0][0])] if len(verts_t) > 1 else [0.0, 0.0],
-                     verts_t[int(b[1][0])] if len(verts_t) > 1 else [0.0, 0.0],
-                     verts_t[int(b[2][0])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
                      material_id])
     return ans
 
@@ -247,7 +247,7 @@ def getTexColorBI(tex_id, u, v):
     if tex_id >= 0:
         h = tex_desc_ti[tex_id][1]
         w = tex_desc_ti[tex_id][2]
-        ans = getTexPixelBI(tex_id, u*w, v*h)
+        ans = getTexPixelBI(tex_id, u*w, (1-v)*h)
     return ans
 
 

@@ -27,9 +27,9 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
                 b = [i.split('/') for i in b]
                 ans.append(
                     [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
-                     verts_t[int(b[0][0])] if len(verts_t) > 1 else [0.0, 0.0],
-                     verts_t[int(b[1][0])] if len(verts_t) > 1 else [0.0, 0.0],
-                     verts_t[int(b[2][0])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                     verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
                      material_id])
     return ans
 
@@ -38,21 +38,31 @@ def normalized(x):
     return x / norm(x)
 
 
+# Scene
+
 scene = []
-scene += readObject('assets/bunny.obj', 0, offset=[0, 0, 0], scale=10)
-scene += readObject('assets/cube.obj', 0, offset=[0, -1, 0], scale=1)
+scene += readObject('assets/spot.obj', 0, offset=[0, 1, 0], scale=1)
+scene += readObject('assets/cube.obj', 1, offset=[0, -1, 0], scale=1)
 
 
 scene_vertices = np.array([i[:3] for i in scene])
 scene_uvcoords = np.array([i[3:6] for i in scene])
 scene_material = np.array([i[6] for i in scene])
 
+print(scene_uvcoords)
+
 n_triangles = scene_vertices.shape[0]
 scene_vertices_dev = ti.Vector.field(3, ti.f32, (n_triangles, 3))
+scene_uvcoords_dev = ti.Vector.field(2, ti.f32, (n_triangles, 3))
+scene_material_dev = ti.field(ti.i32, (n_triangles))
 scene_vertices_dev.from_numpy(scene_vertices)
+scene_uvcoords_dev.from_numpy(scene_uvcoords)
+scene_material_dev.from_numpy(scene_material)
 
 
-IMG_WIDTH = 384
+# Camera
+
+IMG_WIDTH = 256
 IMG_HEIGHT = 256
 
 framebuffer_dev = ti.Vector.field(3, ti.f32, (IMG_WIDTH, IMG_HEIGHT))
@@ -72,7 +82,7 @@ camera_up_vec4 = np.concatenate((camera_up, np.array([1.0], dtype=np.float32)))
 camera_hand_vec4 = np.concatenate(
     (camera_hand, np.array([1.0], dtype=np.float32)))
 
-clip_n, clip_f, clip_l, clip_r, clip_t, clip_b = -2, -100, -1, 1, 1, -1
+clip_n, clip_f, clip_l, clip_r, clip_t, clip_b = -0.2, -100, -0.1, 0.1, 0.1, -0.1
 
 transform_view = np.concatenate(
     ([camera_hand_vec4], [camera_up_vec4], [-camera_gaze_vec4], [[0, 0, 0, 1]])
@@ -114,12 +124,106 @@ transform_view_dev.from_numpy(transform_view)
 
 camera_pos_dev = ti.Vector.field(3, ti.f32, [])
 
+# Lighting
+
 light_pos = np.array([6, 6, 6], dtype=np.float32)
-light_int = np.array([1.0, 0.5, 0.0], dtype=np.float32) * 100
+light_int = np.array([1.0, 0.8, 0.5], dtype=np.float32) * 100
 light_pos_dev = ti.Vector.field(3, ti.f32, [])
 light_int_dev = ti.Vector.field(3, ti.f32, [])
 light_pos_dev.from_numpy(light_pos)
 light_int_dev.from_numpy(light_int)
+
+# Material
+
+N_MATERIALS = 2
+
+material_attr_vec = [
+    [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0, 0, 0], [10.0, 0.0, 0.0]],
+    [[0.1,0.1,0.2], [1.0, 1.0, 1.0], [0.1,0.1,0.1], [10.0, 0.0, 0.0]]
+]
+material_attr_vec_dev = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
+material_attr_vec_dev.from_numpy(np.array(material_attr_vec, np.float32))
+
+material_attr_int = [
+    [0, 0],
+    [0, 1]
+]
+material_attr_int_dev = ti.field(ti.i32, (N_MATERIALS, 2))
+material_attr_int_dev.from_numpy(np.array(material_attr_int, np.int32))
+
+# Ai: [illum model, tex1, tex2, ...]
+# Av For Blinn-Phong: [Ka, Kd, Ks, [Ns, 0, 0]]
+
+
+# Textures
+
+TEX_MEM_SIZE = 1048576 * 4
+tex_mem_used = [0]
+tex_mem = np.array([[0, 0, 0] for i in range(TEX_MEM_SIZE)], dtype=np.float32)
+
+
+def texAlloc(tex_mem, im_filename, used_):
+    used = used_[0]
+    im = plt.imread(im_filename)
+    im = np.array(im, dtype=np.float32)
+    if np.max(im)>1.0:
+        im /= 255.0
+    if len(im.shape) == 2:
+        im = np.tile(np.expand_dims(im, 2), (1, 1, 3))
+    sz = im.shape[0]*im.shape[1]
+    tex_mem[used: used+sz] = im.reshape((-1, 3))
+    used += sz
+    used_[0] = used
+    return used-sz, im.shape[0], im.shape[1]
+
+
+textures_filename = [
+    "assets/spot.png",
+    "assets/ground.jpg"
+]
+
+N_TEXTURE = len(textures_filename)
+
+textures_desc = [texAlloc(tex_mem, i, tex_mem_used) for i in textures_filename]
+
+tex_mem_dev = ti.Vector.field(3, ti.f32, (TEX_MEM_SIZE))
+tex_desc_dev = ti.Vector.field(3, ti.i32, (N_TEXTURE))
+tex_mem_dev.from_numpy(tex_mem)
+tex_desc_dev.from_numpy(np.array(textures_desc))
+
+
+@ti.func
+def getTexPixel(tex_id, x, y):
+    # * x,y must be integer
+    tex_addr = tex_desc_dev[tex_id][0]
+    h = tex_desc_dev[tex_id][1]
+    w = tex_desc_dev[tex_id][2]
+    x = min(x, w-1)
+    x = max(x, 0)
+    y = min(y, h-1)
+    y = max(y, 0)
+    return tex_mem_dev[tex_addr+w*y+x]
+
+
+@ti.func
+def getTexPixelBI(tex_id, x, y):
+    # * x,y can be float
+    x0 = ti.cast(ti.floor(x), ti.int32)
+    y0 = ti.cast(ti.floor(y), ti.int32)
+    x1, y1 = x0 + 1, y0 + 1
+    return getTexPixel(tex_id, x0, y0) * (x1-x) * (y1-y) + getTexPixel(tex_id, x0, y1) * (x1-x) * (y-y0) + \
+        getTexPixel(tex_id, x1, y0) * (x-x0) * (y1-y) + \
+        getTexPixel(tex_id, x1, y1) * (x-x0) * (y-y0)
+
+
+@ti.func
+def getTexColorBI(tex_id, u, v):
+    ans = ti.Vector([1., 1., 1.])
+    if tex_id >= 0:
+        h = tex_desc_dev[tex_id][1]
+        w = tex_desc_dev[tex_id][2]
+        ans = getTexPixelBI(tex_id, u*w, (1-v)*h)
+    return ans
 
 
 @ti.func
@@ -140,9 +244,17 @@ def checkInside(p0, p1, p2, x, y):
 
 
 @ti.func
-def fragmentShader(P, n, Wo, Ka, Kd, Ks, Ns, Pl, Il):
+def fragmentShader(u, v, P, n, Wo, material_id, Pl, Il):
+    # Only support Blinn-Phong now
+    illum_mode = material_attr_int_dev[material_id, 0]
+    tex1 = material_attr_int_dev[material_id, 1]
+    tex1_color = ti.Vector([1.0,1.0,1.0]) if tex1==-1 else getTexColorBI(tex1, u, v)
+    Ka = material_attr_vec_dev[material_id, 0]
+    Kd = material_attr_vec_dev[material_id, 1]
+    Ks = material_attr_vec_dev[material_id, 2]
+    Ns = material_attr_vec_dev[material_id, 3][0]
     result_ambient = Ka
-    result_diffuse = Kd * Il / (Pl - P).dot(Pl - P) * \
+    result_diffuse = Kd * tex1_color * Il / (Pl - P).dot(Pl - P) * \
         max(0, n.dot((Pl-P).normalized()))
     h = ((Pl-P).normalized() + Wo).normalized()
     result_specular = Ks * Il / \
@@ -203,6 +315,7 @@ def render():
             p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
             p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
             p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
+            uv0, uv1, uv2 = scene_uvcoords_dev[i,0],scene_uvcoords_dev[i,1],scene_uvcoords_dev[i,2]
             p0_ss = ti.Vector(
                 [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
             p1_ss = ti.Vector(
@@ -216,6 +329,10 @@ def render():
                            p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[0], p1_vs[0], p2_vs[0])
             y_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
                            p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[1], p1_vs[1], p2_vs[1])
+            u = interpV(p0_ss, p1_ss, p2_ss, x, y,
+                           p0_vs[2], p1_vs[2], p2_vs[2], uv0[0], uv1[0], uv2[0])
+            v = interpV(p0_ss, p1_ss, p2_ss, x, y,
+                           p0_vs[2], p1_vs[2], p2_vs[2], uv0[1], uv1[1], uv2[1])
             p_vs = ti.Vector([x_vs, y_vs, z_vs])
             p_vs4 = ti.Vector([x_vs, y_vs, z_vs, 1.0])
             p_ws4 = transform_view_dev[None].inverse() @ p_vs4
@@ -234,15 +351,14 @@ def render():
             camera_pos_vs4 = transform_view_dev[None] @ camera_pos_ws4
             camera_pos_vs = ti.Vector([camera_pos_ws4[0]/camera_pos_ws4[3],
                                       camera_pos_ws4[1]/camera_pos_ws4[3], camera_pos_ws4[2]/camera_pos_ws4[3]])
+            material_id = scene_material_dev[i]
             if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < clip_n:
                 color = fragmentShader(
+                    u, v,
                     p_vs,
                     cross(p1_vs-p0_vs, p2_vs-p0_vs).normalized(),
                     (camera_pos_vs-p_vs).normalized(),
-                    ti.Vector([0.1, 0.1, 0.2]),
-                    ti.Vector([0.5, 0.5, 0.5]),
-                    ti.Vector([0.5, 0.5, 0.5]) * 10,
-                    10,
+                    material_id,
                     light_pos_vs,
                     light_int
                 )
@@ -282,13 +398,13 @@ while True:
     dx, dy = cx-lx, cy-ly
     lx, ly = cx, cy
 
-    if gui.is_pressed(ti.GUI.CTRL) and gui.is_pressed(ti.GUI.LMB):
-        camera_pos -= dy * camera_up + dx * camera_hand
-    elif gui.is_pressed(ti.GUI.SHIFT) and gui.is_pressed(ti.GUI.LMB):
+    if gui.is_pressed(ti.GUI.SHIFT) and gui.is_pressed(ti.GUI.LMB):
         camera_pos -= dy * camera_gaze
     elif gui.is_pressed(ti.GUI.LMB):
-        phi -= - dx * 6.28 * 0.1
-        theta -= dy * 3.14 * 0.1
+        camera_pos -= dy * camera_up + dx * camera_hand
+    if gui.is_pressed(ti.GUI.RMB):
+        phi += - dx * 6.28 * 0.2
+        theta += dy * 3.14 * 0.2
 
     camera_gaze = np.array([[np.cos(phi), 0, np.sin(phi)], [0, 1, 0], [-np.sin(phi), 0, np.cos(phi)]]) @ \
         np.array([[1, 0, 0], [0, np.cos(theta), -np.sin(theta)],
