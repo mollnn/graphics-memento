@@ -7,6 +7,8 @@ from numpy.linalg.linalg import norm
 import time
 import os
 
+# todo  Perf shadow mapping
+
 ti.init(arch=ti.cuda, debug=False)
 
 # Textures
@@ -138,8 +140,8 @@ def normalized(x):
 # Scene
 
 scene = []
-scene += readObject('assets/spot.obj',  offset=[0, 1, 0], scale=1)
-scene += readObject('assets/cube.obj',  offset=[0, -1, 0], scale=1)
+scene += readObject('assets/rock.obj',  offset=[0, 0.6, 0], scale=1)
+scene += readObject('assets/cube.obj',  offset=[0, -5, 0], scale=5)
 
 
 scene_vertices = np.array([i[:3] for i in scene])
@@ -178,8 +180,8 @@ material_attr_int_dev.from_numpy(np.array(material_attr_int, np.int32))
 
 # Camera
 
-IMG_WIDTH = 256
-IMG_HEIGHT = 256
+IMG_WIDTH = 512
+IMG_HEIGHT = 512
 
 framebuffer_dev = ti.Vector.field(3, ti.f32, (IMG_WIDTH, IMG_HEIGHT))
 framebuffer_z_dev = ti.field(ti.f32, (IMG_WIDTH, IMG_HEIGHT))
@@ -272,7 +274,7 @@ light_int_dev.from_numpy(light_int)
 # !! SHADOW MAPPING
 # * Only one map now, for the first light source
 
-SMAP_SIZE = 512
+SMAP_SIZE = 1024
 smap_dev = ti.field(ti.f32, (SMAP_SIZE, SMAP_SIZE))
 
 smap_pos = np.array(light_pos[0], dtype=np.float32)
@@ -409,54 +411,54 @@ def fmod(x, y):
     return x-int(x/y)*y
 
 
+cache_vertices_vs = ti.Vector.field(3, ti.f32, (n_triangles, 3))
+cache_vertices_ss = ti.Vector.field(3, ti.f32, (n_triangles, 3))
+
 @ti.kernel
 def renderLightpass():
     # * "camera" in this function refers to LIGHT
     for x, y in smap_dev:
         smap_dev[x, y] = 1e9
+
+    for i in range(n_triangles):
+        p0_ws, p1_ws, p2_ws = scene_vertices_dev[i, 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
+        p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
+        p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
+        p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
+        p0_vs4 = smap_transform_view_dev[None] @ p0_ws4
+        p1_vs4 = smap_transform_view_dev[None] @ p1_ws4
+        p2_vs4 = smap_transform_view_dev[None] @ p2_ws4
+        p0_ss4 = smap_transform_dev[None] @ p0_ws4
+        p1_ss4 = smap_transform_dev[None] @ p1_ws4
+        p2_ss4 = smap_transform_dev[None] @ p2_ws4
+        p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
+        p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
+        p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
+        p0_ss = ti.Vector(
+            [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
+        p1_ss = ti.Vector(
+            [p1_ss4[0]/p1_ss4[3], p1_ss4[1]/p1_ss4[3], p1_ss4[2]/p1_ss4[3]])
+        p2_ss = ti.Vector(
+            [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
+        p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
+        cache_vertices_vs[i,0] = p0_vs
+        cache_vertices_vs[i,1] = p1_vs
+        cache_vertices_vs[i,2] = p2_vs
+        cache_vertices_ss[i,0] = p0_ss
+        cache_vertices_ss[i,1] = p1_ss
+        cache_vertices_ss[i,2] = p2_ss
+
     for x, y in smap_dev:
         for i in range(n_triangles):
-            p0_ws, p1_ws, p2_ws = scene_vertices_dev[i,
-                                                     0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
-            p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
-            p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
-            p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
-            p0_vs4 = smap_transform_view_dev[None] @ p0_ws4
-            p1_vs4 = smap_transform_view_dev[None] @ p1_ws4
-            p2_vs4 = smap_transform_view_dev[None] @ p2_ws4
-            p0_ss4 = smap_transform_dev[None] @ p0_ws4
-            p1_ss4 = smap_transform_dev[None] @ p1_ws4
-            p2_ss4 = smap_transform_dev[None] @ p2_ws4
-            p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
-            p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
-            p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
-            uv0, uv1, uv2 = scene_uvcoords_dev[i,
-                                               0], scene_uvcoords_dev[i, 1], scene_uvcoords_dev[i, 2]
-            p0_ss = ti.Vector(
-                [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
-            p1_ss = ti.Vector(
-                [p1_ss4[0]/p1_ss4[3], p1_ss4[1]/p1_ss4[3], p1_ss4[2]/p1_ss4[3]])
-            p2_ss = ti.Vector(
-                [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
-            p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
+            p0_vs = cache_vertices_vs[i,0]  
+            p1_vs = cache_vertices_vs[i,1]  
+            p2_vs = cache_vertices_vs[i,2]  
+            p0_ss = cache_vertices_ss[i,0]  
+            p1_ss = cache_vertices_ss[i,1]  
+            p2_ss = cache_vertices_ss[i,2]  
             z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
                             p0_vs[2], p1_vs[2], p2_vs[2])
-            x_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
-                           p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[0], p1_vs[0], p2_vs[0])
-            y_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
-                           p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[1], p1_vs[1], p2_vs[1])
-            p_vs4 = ti.Vector([x_vs, y_vs, z_vs, 1.0])
-            p_ws4 = smap_transform_view_dev[None].inverse() @ p_vs4
-            p_ws = ti.Vector([p_ws4[0]/p_ws4[3], p_ws4[1] /
-                             p_ws4[3], p_ws4[2]/p_ws4[3]])
-            smap_pos = smap_pos_dev[None]
-            smap_pos_ws4 = ti.Vector(
-                [smap_pos[0], smap_pos[1], smap_pos[2], 1.0])
-            smap_pos_vs4 = smap_transform_view_dev[None] @ smap_pos_ws4
-            smap_pos_vs = ti.Vector([smap_pos_ws4[0]/smap_pos_ws4[3],
-                                      smap_pos_ws4[1]/smap_pos_ws4[3], smap_pos_ws4[2]/smap_pos_ws4[3]])
-
-            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < smap_dev[x, y] and z_vs < 0:
+            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < smap_dev[x, y] and z_vs < -0.1:
                 smap_dev[x, y] = -z_vs
 
 
@@ -478,7 +480,7 @@ def checkShadow(smap_transform_view, obj_pos):
         ix = int(rx*SMAP_SIZE)
         iy = int(ry*SMAP_SIZE)
         smap_z = smap_dev[ix, iy] 
-        if actual_z - smap_z > 1e-3:
+        if actual_z - smap_z > 5e-3:
             ans = False
     return ans
 
@@ -488,37 +490,50 @@ def render():
     for x, y in framebuffer_dev:
         framebuffer_z_dev[x, y] = 1e9
         framebuffer_dev[x, y] = ti.Vector([0., 0., 0.])
+    for i in range(n_triangles):
+        p0_ws, p1_ws, p2_ws = scene_vertices_dev[i, 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
+        p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
+        p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
+        p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
+        p0_vs4 = transform_view_dev[None] @ p0_ws4
+        p1_vs4 = transform_view_dev[None] @ p1_ws4
+        p2_vs4 = transform_view_dev[None] @ p2_ws4
+        p0_ss4 = transform_dev[None] @ p0_ws4
+        p1_ss4 = transform_dev[None] @ p1_ws4
+        p2_ss4 = transform_dev[None] @ p2_ws4
+        p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
+        p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
+        p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
+        p0_ss = ti.Vector(
+            [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
+        p1_ss = ti.Vector(
+            [p1_ss4[0]/p1_ss4[3], p1_ss4[1]/p1_ss4[3], p1_ss4[2]/p1_ss4[3]])
+        p2_ss = ti.Vector(
+            [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
+        p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
+        cache_vertices_vs[i,0] = p0_vs
+        cache_vertices_vs[i,1] = p1_vs
+        cache_vertices_vs[i,2] = p2_vs
+        cache_vertices_ss[i,0] = p0_ss
+        cache_vertices_ss[i,1] = p1_ss
+        cache_vertices_ss[i,2] = p2_ss
+
     for x, y in framebuffer_dev:
         for i in range(n_triangles):
-            p0_ws, p1_ws, p2_ws = scene_vertices_dev[i,
-                                                     0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
-            p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
-            p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
-            p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
-            p0_vs4 = transform_view_dev[None] @ p0_ws4
-            p1_vs4 = transform_view_dev[None] @ p1_ws4
-            p2_vs4 = transform_view_dev[None] @ p2_ws4
-            p0_ss4 = transform_dev[None] @ p0_ws4
-            p1_ss4 = transform_dev[None] @ p1_ws4
-            p2_ss4 = transform_dev[None] @ p2_ws4
-            p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
-            p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
-            p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
-            uv0, uv1, uv2 = scene_uvcoords_dev[i,
-                                               0], scene_uvcoords_dev[i, 1], scene_uvcoords_dev[i, 2]
-            p0_ss = ti.Vector(
-                [p0_ss4[0]/p0_ss4[3], p0_ss4[1]/p0_ss4[3], p0_ss4[2]/p0_ss4[3]])
-            p1_ss = ti.Vector(
-                [p1_ss4[0]/p1_ss4[3], p1_ss4[1]/p1_ss4[3], p1_ss4[2]/p1_ss4[3]])
-            p2_ss = ti.Vector(
-                [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
-            p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
+            p0_vs = cache_vertices_vs[i,0]  
+            p1_vs = cache_vertices_vs[i,1]  
+            p2_vs = cache_vertices_vs[i,2]  
+            p0_ss = cache_vertices_ss[i,0]  
+            p1_ss = cache_vertices_ss[i,1]  
+            p2_ss = cache_vertices_ss[i,2]  
             z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
                             p0_vs[2], p1_vs[2], p2_vs[2])
             x_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
                            p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[0], p1_vs[0], p2_vs[0])
             y_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
                            p0_vs[2], p1_vs[2], p2_vs[2], p0_vs[1], p1_vs[1], p2_vs[1])
+            uv0, uv1, uv2 = scene_uvcoords_dev[i,
+                                               0], scene_uvcoords_dev[i, 1], scene_uvcoords_dev[i, 2]
             u = interpV(p0_ss, p1_ss, p2_ss, x, y,
                         p0_vs[2], p1_vs[2], p2_vs[2], uv0[0], uv1[0], uv2[0])
             v = interpV(p0_ss, p1_ss, p2_ss, x, y,
@@ -535,7 +550,7 @@ def render():
             camera_pos_vs = ti.Vector([camera_pos_ws4[0]/camera_pos_ws4[3],
                                       camera_pos_ws4[1]/camera_pos_ws4[3], camera_pos_ws4[2]/camera_pos_ws4[3]])
 
-            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < 0:
+            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < -0.1:
                 answer = ti.Vector([0., 0., 0.])
                 for idx_light in range(N_LIGHT):
                     light_pos = light_pos_dev[idx_light]
