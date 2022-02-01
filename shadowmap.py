@@ -7,9 +7,8 @@ from numpy.linalg.linalg import norm
 import time
 import os
 
-# todo  Perf shadow mapping
 
-ti.init(arch=ti.cuda, debug=True)
+ti.init(arch=ti.cuda, debug=False)
 
 # Textures
 
@@ -140,8 +139,8 @@ def normalized(x):
 # Scene
 
 scene = []
-scene += readObject('assets/rock.obj',  offset=[0, 0.6, 0], scale=1)
-scene += readObject('assets/cube.obj',  offset=[0, -5, 0], scale=5)
+scene += readObject('assets/rock.obj',  offset=[1.0, 0.3, 0], scale=0.5)
+scene += readObject('assets/test_r.obj',  offset=[0, 0, 0], scale=5)
 
 
 scene_vertices = np.array([i[:3] for i in scene])
@@ -282,7 +281,7 @@ smap_gaze = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], 
 smap_grav = np.array([[0, 1, 0], [0, -1, 0],[0, 0, -1], [0, 0, -1],  [1, 0, 0], [-1,0,0]], dtype=np.float32)
 smap_hand = np.array([normalized(np.cross(i[0],i[1])) for i in list(zip(smap_grav, smap_gaze))])
 smap_up = np.array([normalized(np.cross(i[0],i[1])) for i in list(zip(smap_hand, smap_gaze))])
-smap_fov = 2.0
+smap_fov = 1.8
 smap_asp = 1.0
 
 
@@ -353,7 +352,7 @@ def getTexColorBI(tex_id, u, v):
 
 @ti.func
 def checksgn(x):
-    return x[2] >= 0
+    return x[2] > 0
 
 
 @ti.func
@@ -428,7 +427,6 @@ cache_vertices_ss = ti.Vector.field(3, ti.f32, (n_triangles, 3))
 
 @ti.kernel
 def renderLightpass(light_id: ti.i32, sub_id: ti.i32):
-    # todo generate for each light, each dir
     # * "camera" in this function refers to LIGHT
     for pix in range(SMAP_SIZE * SMAP_SIZE):
         x = pix % SMAP_SIZE
@@ -493,7 +491,6 @@ def useWhichShadowMap(light_id, p_ws):
 
 @ti.func
 def checkShadow(light_id, obj_pos):
-    # todo check for each light, each dir
     dir_id = useWhichShadowMap(light_id, obj_pos)
     smap_transform_view = smap_transform_view_dev[light_id, dir_id]
     obj_pos4 = ti.Vector([obj_pos[0], obj_pos[1], obj_pos[2], 1.0])
@@ -512,7 +509,7 @@ def checkShadow(light_id, obj_pos):
         ix = int(rx*SMAP_SIZE)
         iy = int(ry*SMAP_SIZE)
         smap_z = smap_dev[light_id, dir_id, ix, iy] 
-        if actual_z - smap_z > 5e-3:
+        if actual_z - smap_z > 1e-1:
             ans = False
     return ans
 
@@ -576,13 +573,10 @@ def render():
             p_ws = ti.Vector([p_ws4[0]/p_ws4[3], p_ws4[1] /
                              p_ws4[3], p_ws4[2]/p_ws4[3]])
             camera_pos = camera_pos_dev[None]
-            camera_pos_ws4 = ti.Vector(
-                [camera_pos[0], camera_pos[1], camera_pos[2], 1.0])
-            camera_pos_vs4 = transform_view_dev[None] @ camera_pos_ws4
-            camera_pos_vs = ti.Vector([camera_pos_ws4[0]/camera_pos_ws4[3],
-                                      camera_pos_ws4[1]/camera_pos_ws4[3], camera_pos_ws4[2]/camera_pos_ws4[3]])
-
-            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < -0.1:
+            camera_pos_vs = ti.Vector([0,0,0],dt=ti.f32)
+            normal_vs = (p1_vs-p0_vs).cross(p2_vs-p0_vs).normalized()
+            if normal_vs.dot(p_vs-camera_pos_vs)<1e-4 and \
+                checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < -0.1:
                 answer = ti.Vector([0., 0., 0.])
                 for idx_light in range(N_LIGHT):
                     light_pos = light_pos_dev[idx_light]
@@ -604,12 +598,14 @@ def render():
                     )
                     if checkShadow(idx_light,p_ws):
                         answer += color
-                framebuffer_dev[x, y] = answer
+                framebuffer_dev[x, y] = p_vs * 0.1 + 0.5
                 framebuffer_z_dev[x, y] = -z_vs
 
 gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
 lx, ly = 0.0, 0.0
 phi, theta = 0.0, 0.0
+
+regen_shadowmap = True
 while True:
 
     if gui.get_event(ti.GUI.PRESS):
@@ -680,10 +676,13 @@ while True:
     transform_dev.from_numpy(transform)
     transform_view_dev.from_numpy(transform_view)
 
-    for i in range(N_LIGHT):
-        for j in range(6):
-            renderLightpass(i,j)
-            ti.sync()
+    if regen_shadowmap:
+        regen_shadowmap= False
+        for i in range(N_LIGHT):
+            for j in range(6):
+                renderLightpass(i,j)
+                ti.sync()
+
     render()
     ti.sync()
 
