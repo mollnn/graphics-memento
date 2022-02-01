@@ -9,7 +9,7 @@ import os
 
 # todo  Perf shadow mapping
 
-ti.init(arch=ti.cuda, debug=False)
+ti.init(arch=ti.cuda, debug=True)
 
 # Textures
 
@@ -274,31 +274,43 @@ light_int_dev.from_numpy(light_int)
 # !! SHADOW MAPPING
 # * Only one map now, for the first light source
 
-SMAP_SIZE = 1024
-smap_dev = ti.field(ti.f32, (SMAP_SIZE, SMAP_SIZE))
+SMAP_SIZE = 512
+smap_dev = ti.field(ti.f32, (N_LIGHT, 6, SMAP_SIZE, SMAP_SIZE))
 
-smap_pos = np.array(light_pos[0], dtype=np.float32)
-smap_gaze = np.array([0, -1, 0], dtype=np.float32)
-smap_grav = np.array([0, 0, -1], dtype=np.float32)
-smap_hand = normalized(np.cross(smap_grav, smap_gaze))
-smap_up = normalized(np.cross(smap_hand, smap_gaze))
-smap_fov = 2.5
+smap_pos = np.array(light_pos, dtype=np.float32)
+smap_gaze = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]], dtype=np.float32)
+smap_grav = np.array([[0, 1, 0], [0, -1, 0],[0, 0, -1], [0, 0, -1],  [1, 0, 0], [-1,0,0]], dtype=np.float32)
+smap_hand = np.array([normalized(np.cross(i[0],i[1])) for i in list(zip(smap_grav, smap_gaze))])
+smap_up = np.array([normalized(np.cross(i[0],i[1])) for i in list(zip(smap_hand, smap_gaze))])
+smap_fov = 2.0
 smap_asp = 1.0
 
-smap_transform, smap_transform_view = makeCamera(
-    smap_pos, smap_gaze, smap_up, smap_hand, smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)
 
-smap_pos_dev = ti.Vector.field(3, ti.f32, [])
-smap_gaze_dev = ti.Vector.field(3, ti.f32, [])
-smap_grav_dev = ti.Vector.field(3, ti.f32, [])
-smap_hand_dev = ti.Vector.field(3, ti.f32, [])
-smap_up_dev = ti.Vector.field(3, ti.f32, [])
-smap_transform_dev = ti.Matrix.field(4, 4, ti.f32, [])
-smap_transform_view_dev = ti.Matrix.field(4, 4, ti.f32, [])
+smap_transform = np.array([
+    [
+        makeCamera(smap_pos[i], smap_gaze[j], smap_up[j], smap_hand[j], smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)[0]
+        for j in range(6)
+    ]
+    for i in range(N_LIGHT)
+], dtype=np.float32)
+
+smap_transform_view = np.array([
+    [
+        makeCamera(smap_pos[i], smap_gaze[j], smap_up[j], smap_hand[j], smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)[1]
+        for j in range(6)
+    ]
+    for i in range(N_LIGHT)
+], dtype=np.float32)
+
+smap_pos_dev = ti.Vector.field(3, ti.f32, [N_LIGHT])
+smap_gaze_dev = ti.Vector.field(3, ti.f32, [6])
+smap_hand_dev = ti.Vector.field(3, ti.f32, [6])
+smap_up_dev = ti.Vector.field(3, ti.f32, [6])
+smap_transform_dev = ti.Matrix.field(4, 4, ti.f32, [N_LIGHT, 6])
+smap_transform_view_dev = ti.Matrix.field(4, 4, ti.f32, [N_LIGHT, 6])
 
 smap_pos_dev.from_numpy(smap_pos)
 smap_gaze_dev.from_numpy(smap_gaze)
-smap_grav_dev.from_numpy(smap_grav)
 smap_hand_dev.from_numpy(smap_hand)
 smap_up_dev .from_numpy(smap_up)
 smap_transform_dev .from_numpy(smap_transform)
@@ -415,22 +427,25 @@ cache_vertices_vs = ti.Vector.field(3, ti.f32, (n_triangles, 3))
 cache_vertices_ss = ti.Vector.field(3, ti.f32, (n_triangles, 3))
 
 @ti.kernel
-def renderLightpass():
+def renderLightpass(light_id: ti.i32, sub_id: ti.i32):
+    # todo generate for each light, each dir
     # * "camera" in this function refers to LIGHT
-    for x, y in smap_dev:
-        smap_dev[x, y] = 1e9
+    for pix in range(SMAP_SIZE * SMAP_SIZE):
+        x = pix % SMAP_SIZE
+        y = pix // SMAP_SIZE
+        smap_dev[light_id, sub_id, x, y] = 1e9
 
     for i in range(n_triangles):
         p0_ws, p1_ws, p2_ws = scene_vertices_dev[i, 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
         p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
         p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
         p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
-        p0_vs4 = smap_transform_view_dev[None] @ p0_ws4
-        p1_vs4 = smap_transform_view_dev[None] @ p1_ws4
-        p2_vs4 = smap_transform_view_dev[None] @ p2_ws4
-        p0_ss4 = smap_transform_dev[None] @ p0_ws4
-        p1_ss4 = smap_transform_dev[None] @ p1_ws4
-        p2_ss4 = smap_transform_dev[None] @ p2_ws4
+        p0_vs4 = smap_transform_view_dev[light_id, sub_id] @ p0_ws4
+        p1_vs4 = smap_transform_view_dev[light_id, sub_id] @ p1_ws4
+        p2_vs4 = smap_transform_view_dev[light_id, sub_id] @ p2_ws4
+        p0_ss4 = smap_transform_dev[light_id, sub_id] @ p0_ws4
+        p1_ss4 = smap_transform_dev[light_id, sub_id] @ p1_ws4
+        p2_ss4 = smap_transform_dev[light_id, sub_id] @ p2_ws4
         p0_vs = ti.Vector([p0_vs4[0], p0_vs4[1], p0_vs4[2]])
         p1_vs = ti.Vector([p1_vs4[0], p1_vs4[1], p1_vs4[2]])
         p2_vs = ti.Vector([p2_vs4[0], p2_vs4[1], p2_vs4[2]])
@@ -448,7 +463,9 @@ def renderLightpass():
         cache_vertices_ss[i,1] = p1_ss
         cache_vertices_ss[i,2] = p2_ss
 
-    for x, y in smap_dev:
+    for pix in range(SMAP_SIZE * SMAP_SIZE):
+        x = pix % SMAP_SIZE
+        y = pix // SMAP_SIZE
         for i in range(n_triangles):
             p0_vs = cache_vertices_vs[i,0]  
             p1_vs = cache_vertices_vs[i,1]  
@@ -458,12 +475,27 @@ def renderLightpass():
             p2_ss = cache_vertices_ss[i,2]  
             z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
                             p0_vs[2], p1_vs[2], p2_vs[2])
-            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < smap_dev[x, y] and z_vs < -0.1:
-                smap_dev[x, y] = -z_vs
+            if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < smap_dev[light_id, sub_id, x, y] and z_vs < -0.1:
+                smap_dev[light_id, sub_id, x, y] = -z_vs
+
 
 
 @ti.func
-def checkShadow(smap_transform_view, obj_pos):
+def useWhichShadowMap(light_id, p_ws):
+    light_pos = light_pos_dev[light_id]
+    light_dir = p_ws - light_pos       # ! not normalized
+    ans = 0
+    ansv = smap_gaze_dev[ans].dot(light_dir)
+    for i in range(1,6):
+        d = smap_gaze_dev[i].dot(light_dir)
+        if d>ansv: ansv, ans = d, i
+    return ans
+
+@ti.func
+def checkShadow(light_id, obj_pos):
+    # todo check for each light, each dir
+    dir_id = useWhichShadowMap(light_id, obj_pos)
+    smap_transform_view = smap_transform_view_dev[light_id, dir_id]
     obj_pos4 = ti.Vector([obj_pos[0], obj_pos[1], obj_pos[2], 1.0])
     obj_pos_vs4 = smap_transform_view @ obj_pos4
     obj_pos_vs = ti.Vector([obj_pos_vs4[0]/obj_pos_vs4[3], obj_pos_vs4[1]/obj_pos_vs4[3], obj_pos_vs4[2]/obj_pos_vs4[3]])
@@ -479,7 +511,7 @@ def checkShadow(smap_transform_view, obj_pos):
     if rx>0 and rx<1 and ry>0 and ry<1:
         ix = int(rx*SMAP_SIZE)
         iy = int(ry*SMAP_SIZE)
-        smap_z = smap_dev[ix, iy] 
+        smap_z = smap_dev[light_id, dir_id, ix, iy] 
         if actual_z - smap_z > 5e-3:
             ans = False
     return ans
@@ -570,11 +602,10 @@ def render():
                         light_pos_vs,
                         light_int
                     )
-                    if idx_light>0 or checkShadow(smap_transform_view_dev[None],p_ws):
+                    if checkShadow(idx_light,p_ws):
                         answer += color
                 framebuffer_dev[x, y] = answer
                 framebuffer_z_dev[x, y] = -z_vs
-
 
 gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
 lx, ly = 0.0, 0.0
@@ -649,8 +680,12 @@ while True:
     transform_dev.from_numpy(transform)
     transform_view_dev.from_numpy(transform_view)
 
-    renderLightpass()
+    for i in range(N_LIGHT):
+        for j in range(6):
+            renderLightpass(i,j)
+            ti.sync()
     render()
+    ti.sync()
 
     gui.set_image(framebuffer_dev)
 
