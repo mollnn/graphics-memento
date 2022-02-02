@@ -277,17 +277,22 @@ SMAP_SIZE = 512
 smap_dev = ti.field(ti.f32, (N_LIGHT, 6, SMAP_SIZE, SMAP_SIZE))
 
 smap_pos = np.array(light_pos, dtype=np.float32)
-smap_gaze = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]], dtype=np.float32)
-smap_grav = np.array([[0, 1, 0], [0, -1, 0],[0, 0, -1], [0, 0, -1],  [1, 0, 0], [-1,0,0]], dtype=np.float32)
-smap_hand = np.array([normalized(np.cross(i[0],i[1])) for i in list(zip(smap_grav, smap_gaze))])
-smap_up = np.array([normalized(np.cross(i[0],i[1])) for i in list(zip(smap_hand, smap_gaze))])
+smap_gaze = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0],
+                     [0, 1, 0], [0, 0, -1], [0, 0, 1]], dtype=np.float32)
+smap_grav = np.array([[0, 1, 0], [0, -1, 0], [0, 0, -1],
+                     [0, 0, -1],  [1, 0, 0], [-1, 0, 0]], dtype=np.float32)
+smap_hand = np.array([normalized(np.cross(i[0], i[1]))
+                     for i in list(zip(smap_grav, smap_gaze))])
+smap_up = np.array([normalized(np.cross(i[0], i[1]))
+                   for i in list(zip(smap_hand, smap_gaze))])
 smap_fov = 1.8
 smap_asp = 1.0
 
 
 smap_transform = np.array([
     [
-        makeCamera(smap_pos[i], smap_gaze[j], smap_up[j], smap_hand[j], smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)[0]
+        makeCamera(smap_pos[i], smap_gaze[j], smap_up[j],
+                   smap_hand[j], smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)[0]
         for j in range(6)
     ]
     for i in range(N_LIGHT)
@@ -295,7 +300,8 @@ smap_transform = np.array([
 
 smap_transform_view = np.array([
     [
-        makeCamera(smap_pos[i], smap_gaze[j], smap_up[j], smap_hand[j], smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)[1]
+        makeCamera(smap_pos[i], smap_gaze[j], smap_up[j],
+                   smap_hand[j], smap_fov, smap_asp, SMAP_SIZE, SMAP_SIZE)[1]
         for j in range(6)
     ]
     for i in range(N_LIGHT)
@@ -425,6 +431,7 @@ def fmod(x, y):
 cache_vertices_vs = ti.Vector.field(3, ti.f32, (n_triangles, 3))
 cache_vertices_ss = ti.Vector.field(3, ti.f32, (n_triangles, 3))
 
+
 @ti.kernel
 def renderLightpass(light_id: ti.i32, sub_id: ti.i32):
     # * "camera" in this function refers to LIGHT
@@ -434,7 +441,8 @@ def renderLightpass(light_id: ti.i32, sub_id: ti.i32):
         smap_dev[light_id, sub_id, x, y] = 1e9
 
     for i in range(n_triangles):
-        p0_ws, p1_ws, p2_ws = scene_vertices_dev[i, 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
+        p0_ws, p1_ws, p2_ws = scene_vertices_dev[i,
+                                                 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
         p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
         p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
         p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
@@ -454,28 +462,27 @@ def renderLightpass(light_id: ti.i32, sub_id: ti.i32):
         p2_ss = ti.Vector(
             [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
         p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
-        cache_vertices_vs[i,0] = p0_vs
-        cache_vertices_vs[i,1] = p1_vs
-        cache_vertices_vs[i,2] = p2_vs
-        cache_vertices_ss[i,0] = p0_ss
-        cache_vertices_ss[i,1] = p1_ss
-        cache_vertices_ss[i,2] = p2_ss
+        cache_vertices_vs[i, 0] = p0_vs
+        cache_vertices_vs[i, 1] = p1_vs
+        cache_vertices_vs[i, 2] = p2_vs
+        cache_vertices_ss[i, 0] = p0_ss
+        cache_vertices_ss[i, 1] = p1_ss
+        cache_vertices_ss[i, 2] = p2_ss
 
     for pix in range(SMAP_SIZE * SMAP_SIZE):
         x = pix % SMAP_SIZE
         y = pix // SMAP_SIZE
         for i in range(n_triangles):
-            p0_vs = cache_vertices_vs[i,0]  
-            p1_vs = cache_vertices_vs[i,1]  
-            p2_vs = cache_vertices_vs[i,2]  
-            p0_ss = cache_vertices_ss[i,0]  
-            p1_ss = cache_vertices_ss[i,1]  
-            p2_ss = cache_vertices_ss[i,2]  
+            p0_vs = cache_vertices_vs[i, 0]
+            p1_vs = cache_vertices_vs[i, 1]
+            p2_vs = cache_vertices_vs[i, 2]
+            p0_ss = cache_vertices_ss[i, 0]
+            p1_ss = cache_vertices_ss[i, 1]
+            p2_ss = cache_vertices_ss[i, 2]
             z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
                             p0_vs[2], p1_vs[2], p2_vs[2])
             if checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < smap_dev[light_id, sub_id, x, y] and z_vs < -0.1:
                 smap_dev[light_id, sub_id, x, y] = -z_vs
-
 
 
 @ti.func
@@ -484,10 +491,12 @@ def useWhichShadowMap(light_id, p_ws):
     light_dir = p_ws - light_pos       # ! not normalized
     ans = 0
     ansv = smap_gaze_dev[ans].dot(light_dir)
-    for i in range(1,6):
+    for i in range(1, 6):
         d = smap_gaze_dev[i].dot(light_dir)
-        if d>ansv: ansv, ans = d, i
+        if d > ansv:
+            ansv, ans = d, i
     return ans
+
 
 @ti.func
 def checkShadow(light_id, obj_pos):
@@ -495,22 +504,26 @@ def checkShadow(light_id, obj_pos):
     smap_transform_view = smap_transform_view_dev[light_id, dir_id]
     obj_pos4 = ti.Vector([obj_pos[0], obj_pos[1], obj_pos[2], 1.0])
     obj_pos_vs4 = smap_transform_view @ obj_pos4
-    obj_pos_vs = ti.Vector([obj_pos_vs4[0]/obj_pos_vs4[3], obj_pos_vs4[1]/obj_pos_vs4[3], obj_pos_vs4[2]/obj_pos_vs4[3]])
+    obj_pos_vs = ti.Vector([obj_pos_vs4[0]/obj_pos_vs4[3],
+                           obj_pos_vs4[1]/obj_pos_vs4[3], obj_pos_vs4[2]/obj_pos_vs4[3]])
     dir_vs = - obj_pos_vs / obj_pos_vs[2]
-    fx = ti.tan(smap_fov / 2) 
-    fy = fx * smap_asp
+    fx = ti.tan(smap_fov / 2)
+    fy = fx / smap_asp
     dx = dir_vs[0]
     dy = dir_vs[1]
     rx = dx / fx / 2 + 0.5
     ry = dy / fy / 2 + 0.5
     actual_z = -obj_pos_vs[2]
-    ans = True
-    if rx>0 and rx<1 and ry>0 and ry<1:
-        ix = int(rx*SMAP_SIZE)
-        iy = int(ry*SMAP_SIZE)
-        smap_z = smap_dev[light_id, dir_id, ix, iy] 
-        if actual_z - smap_z > 1e-1:
-            ans = False
+    WND_RADIUS = 3
+    ans = 1.0
+    ix = int(rx*SMAP_SIZE)
+    iy = int(ry*SMAP_SIZE)
+    for jx in range(ix-WND_RADIUS+1, ix+WND_RADIUS):
+        for jy in range(iy-WND_RADIUS+1, iy+WND_RADIUS):
+            if jx >= 0 and jx < SMAP_SIZE and jy >= 0 and jy < SMAP_SIZE:
+                smap_z = smap_dev[light_id, dir_id, jx, jy]
+                if actual_z - smap_z > 3e-1:
+                    ans -= 1.0 / (WND_RADIUS*2-1) ** 2
     return ans
 
 
@@ -520,7 +533,8 @@ def render():
         framebuffer_z_dev[x, y] = 1e9
         framebuffer_dev[x, y] = ti.Vector([0., 0., 0.])
     for i in range(n_triangles):
-        p0_ws, p1_ws, p2_ws = scene_vertices_dev[i, 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
+        p0_ws, p1_ws, p2_ws = scene_vertices_dev[i,
+                                                 0], scene_vertices_dev[i, 1], scene_vertices_dev[i, 2]
         p0_ws4 = ti.Vector([p0_ws[0], p0_ws[1], p0_ws[2], 1], ti.f32)
         p1_ws4 = ti.Vector([p1_ws[0], p1_ws[1], p1_ws[2], 1], ti.f32)
         p2_ws4 = ti.Vector([p2_ws[0], p2_ws[1], p2_ws[2], 1], ti.f32)
@@ -540,21 +554,21 @@ def render():
         p2_ss = ti.Vector(
             [p2_ss4[0]/p2_ss4[3], p2_ss4[1]/p2_ss4[3], p2_ss4[2]/p2_ss4[3]])
         p0_ss[2], p1_ss[2], p2_ss[2] = 0, 0, 0
-        cache_vertices_vs[i,0] = p0_vs
-        cache_vertices_vs[i,1] = p1_vs
-        cache_vertices_vs[i,2] = p2_vs
-        cache_vertices_ss[i,0] = p0_ss
-        cache_vertices_ss[i,1] = p1_ss
-        cache_vertices_ss[i,2] = p2_ss
+        cache_vertices_vs[i, 0] = p0_vs
+        cache_vertices_vs[i, 1] = p1_vs
+        cache_vertices_vs[i, 2] = p2_vs
+        cache_vertices_ss[i, 0] = p0_ss
+        cache_vertices_ss[i, 1] = p1_ss
+        cache_vertices_ss[i, 2] = p2_ss
 
     for x, y in framebuffer_dev:
         for i in range(n_triangles):
-            p0_vs = cache_vertices_vs[i,0]  
-            p1_vs = cache_vertices_vs[i,1]  
-            p2_vs = cache_vertices_vs[i,2]  
-            p0_ss = cache_vertices_ss[i,0]  
-            p1_ss = cache_vertices_ss[i,1]  
-            p2_ss = cache_vertices_ss[i,2]  
+            p0_vs = cache_vertices_vs[i, 0]
+            p1_vs = cache_vertices_vs[i, 1]
+            p2_vs = cache_vertices_vs[i, 2]
+            p0_ss = cache_vertices_ss[i, 0]
+            p1_ss = cache_vertices_ss[i, 1]
+            p2_ss = cache_vertices_ss[i, 2]
             z_vs = -interpZ(p0_ss, p1_ss, p2_ss, x, y,
                             p0_vs[2], p1_vs[2], p2_vs[2])
             x_vs = interpV(p0_ss, p1_ss, p2_ss, x, y,
@@ -573,10 +587,10 @@ def render():
             p_ws = ti.Vector([p_ws4[0]/p_ws4[3], p_ws4[1] /
                              p_ws4[3], p_ws4[2]/p_ws4[3]])
             camera_pos = camera_pos_dev[None]
-            camera_pos_vs = ti.Vector([0,0,0],dt=ti.f32)
+            camera_pos_vs = ti.Vector([0, 0, 0], dt=ti.f32)
             normal_vs = (p1_vs-p0_vs).cross(p2_vs-p0_vs).normalized()
-            if normal_vs.dot(p_vs-camera_pos_vs)<1e-4 and \
-                checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < -0.1:
+            if normal_vs.dot(p_vs-camera_pos_vs) < 1e-4 and \
+                    checkInside(p0_ss, p1_ss, p2_ss, x, y) and -z_vs < framebuffer_z_dev[x, y] and z_vs < -0.1:
                 answer = ti.Vector([0., 0., 0.])
                 for idx_light in range(N_LIGHT):
                     light_pos = light_pos_dev[idx_light]
@@ -596,10 +610,10 @@ def render():
                         light_pos_vs,
                         light_int
                     )
-                    if checkShadow(idx_light,p_ws):
-                        answer += color
+                    answer += color * checkShadow(idx_light, p_ws)
                 framebuffer_dev[x, y] = answer
                 framebuffer_z_dev[x, y] = -z_vs
+
 
 gui = ti.GUI(res=(IMG_WIDTH, IMG_HEIGHT))
 lx, ly = 0.0, 0.0
@@ -677,10 +691,10 @@ while True:
     transform_view_dev.from_numpy(transform_view)
 
     if regen_shadowmap:
-        regen_shadowmap= False
+        regen_shadowmap = False
         for i in range(N_LIGHT):
             for j in range(6):
-                renderLightpass(i,j)
+                renderLightpass(i, j)
                 ti.sync()
 
     render()
