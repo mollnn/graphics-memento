@@ -98,7 +98,7 @@ def readMaterial(filename):
         material_attr_int.append(mtl_int)
 
 
-def readObject(filename, offset=[0, 0, 0], scale=1):
+def readObject(filename, offset=[0, 0, 0], scale=[1,1,1]):
     (filepath, _) = os.path.split(filename)
     fp = open(filename, 'r')
     fl = fp.readlines()
@@ -139,8 +139,8 @@ def normalized(x):
 # Scene
 
 scene = []
-scene += readObject('assets/rock.obj',  offset=[1.0, 0.3, 0], scale=0.5)
-scene += readObject('assets/test_r.obj',  offset=[0, 0, 0], scale=5)
+scene += readObject('assets/rock.obj',  offset=[1.0, 0.3, 0], scale=[0.3,2,0.3])
+scene += readObject('assets/test_r.obj',  offset=[0, 0, 0], scale=[5,5,5])
 
 
 scene_vertices = np.array([i[:3] for i in scene])
@@ -262,7 +262,7 @@ transform_view_dev.from_numpy(transform_view)
 camera_pos_dev = ti.Vector.field(3, ti.f32, [])
 
 # Lighting
-light_pos = np.array([[6, 6, 6], [0, 5, 0]], dtype=np.float32)
+light_pos = np.array([[6, 6, 10], [0, 5, -5]], dtype=np.float32)
 light_int = np.array([[100, 100, 100], [10, 10, 10]], dtype=np.float32)
 N_LIGHT = light_pos.shape[0]
 light_pos_dev = ti.Vector.field(3, ti.f32, [N_LIGHT])
@@ -499,7 +499,7 @@ def useWhichShadowMap(light_id, p_ws):
 
 
 @ti.func
-def checkShadow(light_id, obj_pos):
+def getBlockerDistance(light_id, obj_pos):
     dir_id = useWhichShadowMap(light_id, obj_pos)
     smap_transform_view = smap_transform_view_dev[light_id, dir_id]
     obj_pos4 = ti.Vector([obj_pos[0], obj_pos[1], obj_pos[2], 1.0])
@@ -514,16 +514,68 @@ def checkShadow(light_id, obj_pos):
     rx = dx / fx / 2 + 0.5
     ry = dy / fy / 2 + 0.5
     actual_z = -obj_pos_vs[2]
-    WND_RADIUS = 3
+    WND_RADIUS = 7
+    ans = 0.0
+    anss = 1e-5
+
+    ix = rx*SMAP_SIZE
+    iy = ry*SMAP_SIZE
+
+    N_SAMPLES = 32
+    for _ in range(N_SAMPLES):
+        r1 = ti.random()
+        r2 = ti.random()
+        coord_r = ti.sqrt(r1)*WND_RADIUS
+        coord_i = 2*3.14159*r2
+        jx = int(ix + coord_r * ti.cos(coord_i))
+        jy = int(iy + coord_r * ti.sin(coord_i))
+        if jx >= 0 and jx < SMAP_SIZE and jy >= 0 and jy < SMAP_SIZE:
+            smap_z = smap_dev[light_id, dir_id, jx, jy]
+            if actual_z - smap_z > 3e-1:
+                ans += smap_z
+                anss += 1.0
+
+    return ans / anss
+
+
+@ti.func
+def checkShadow(light_id, obj_pos):
+    wL = 1.0    # width of light
+    dB = getBlockerDistance(light_id, obj_pos)
+    dir_id = useWhichShadowMap(light_id, obj_pos)
+    smap_transform_view = smap_transform_view_dev[light_id, dir_id]
+    obj_pos4 = ti.Vector([obj_pos[0], obj_pos[1], obj_pos[2], 1.0])
+    obj_pos_vs4 = smap_transform_view @ obj_pos4
+    obj_pos_vs = ti.Vector([obj_pos_vs4[0]/obj_pos_vs4[3],
+                           obj_pos_vs4[1]/obj_pos_vs4[3], obj_pos_vs4[2]/obj_pos_vs4[3]])
+    dir_vs = - obj_pos_vs / obj_pos_vs[2]
+    fx = ti.tan(smap_fov / 2)
+    fy = fx / smap_asp
+    dx = dir_vs[0]
+    dy = dir_vs[1]
+    rx = dx / fx / 2 + 0.5
+    ry = dy / fy / 2 + 0.5
+    actual_z = -obj_pos_vs[2]
+    dR = actual_z
+    wP = wL * (dR - dB) / dB
+    wM = wP / actual_z / fx * SMAP_SIZE / 2 + 0.001
+
     ans = 1.0
-    ix = int(rx*SMAP_SIZE)
-    iy = int(ry*SMAP_SIZE)
-    for jx in range(ix-WND_RADIUS+1, ix+WND_RADIUS):
-        for jy in range(iy-WND_RADIUS+1, iy+WND_RADIUS):
-            if jx >= 0 and jx < SMAP_SIZE and jy >= 0 and jy < SMAP_SIZE:
-                smap_z = smap_dev[light_id, dir_id, jx, jy]
-                if actual_z - smap_z > 3e-1:
-                    ans -= 1.0 / (WND_RADIUS*2-1) ** 2
+    ix = rx*SMAP_SIZE
+    iy = ry*SMAP_SIZE
+
+    N_SAMPLES = 32
+    for _ in range(N_SAMPLES):
+        r1 = ti.random()
+        r2 = ti.random()
+        coord_r = ti.sqrt(r1)*wM
+        coord_i = 2*3.14159*r2
+        jx = int(ix + coord_r * ti.cos(coord_i))
+        jy = int(iy + coord_r * ti.sin(coord_i))
+        if jx >= 0 and jx < SMAP_SIZE and jy >= 0 and jy < SMAP_SIZE:
+            smap_z = smap_dev[light_id, dir_id, jx, jy]
+            if actual_z - smap_z > 3e-1:
+                ans -= 1.0 / N_SAMPLES
     return ans
 
 
