@@ -1,6 +1,5 @@
 # Path Trace (full version)
 #   sample mesh light, bvh, microfacet, texture
-# TODO check microfacet and fix it
 
 from importlib_metadata import itertools
 import numpy as np
@@ -171,12 +170,26 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
             elif a[0] == 'f':
                 b = a[1:]
                 b = [i.split('/') for i in b]
-                ans.append(
-                    [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
-                     verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                     verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                     verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                     material_id])
+                if len(b)==3:
+                    ans.append(
+                        [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
+                        verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        material_id])
+                elif len(b)==4:
+                    ans.append(
+                        [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
+                        verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        material_id])
+                    ans.append(
+                        [verts[int(b[2][0])]*scale+offset, verts[int(b[3][0])]*scale+offset, verts[int(b[0][0])]*scale+offset,
+                        verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        verts_t[int(b[3][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+                        material_id])
     return ans
 
 
@@ -252,15 +265,8 @@ def getTexColorBI(tex_id, u, v):
 
 
 scene = []
-scene += readObject('assets/cube.obj', 1, offset=[0, -20, 0], scale=10)
-scene += readObject('assets/cube.obj', 3, offset=[-20, 0, 0], scale=10)
-scene += readObject('assets/cube.obj', 1, offset=[0, 0, -20], scale=10)
-scene += readObject('assets/cube.obj', 1, offset=[0, 20, 0], scale=10)
-scene += readObject('assets/test.obj', 0, offset=[0, 9.9, 0], scale=2)
-scene += readObject('assets/cube.obj', 4, offset=[20, 0, 0], scale=10)
-scene += readObject('assets/cube.obj', 2, offset=[0, 0, 20], scale=10)
-scene += readObject('assets/bunny.obj', 5, offset=[0, -1, -1], scale=10)
-scene += readObject('assets/bunny.obj', 6, offset=[0, -1, 1], scale=10)
+scene += readObject('assets/sponza/sponza.obj', 1, offset=[0, 0, 0], scale=1)
+scene += readObject('assets/test.obj', 0, offset=[0, 50, 0], scale=5)
 
 scene_material_id = [i[6] for i in scene]
 scene_uv = [i[3:6] for i in scene]
@@ -657,15 +663,15 @@ def render():
                                 coef *= brdf * 3.14159
                                 orig = hit_pos + wi * 1e-4
                                 dir = wi
-                            elif material_type_id == 2:
-                                # Pure specular
-                                brdf = material_attributes[material_id, 1]
-                                wi = 2*normal.dot(-dir)*normal+dir
-                                wi = wi.normalized()
-                                coef *= brdf
-                                orig = hit_pos + wi * 1e-4
-                                dir = wi
-                                light_source_visible = True
+                            # elif material_type_id == 2:
+                            #     # Pure specular
+                            #     brdf = material_attributes[material_id, 1]
+                            #     wi = 2*normal.dot(-dir)*normal+dir
+                            #     wi = wi.normalized()
+                            #     coef *= brdf
+                            #     orig = hit_pos + wi * 1e-4
+                            #     dir = wi
+                            #     light_source_visible = True
                         else:
                             break
                     else:
