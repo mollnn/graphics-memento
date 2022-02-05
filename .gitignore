@@ -2,3 +2,5 @@ taichi_examples
 *.pyc
 .VSCodeCounter
 cv_counter.py
+assets/fruit_v2.obj
+assets/FS_Kitchen.obj
