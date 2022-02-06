@@ -9,7 +9,7 @@ import time
 from numpy.linalg import norm
 import random
 from matplotlib import pyplot as plt
-
+import os
 
 ti.init(arch=ti.cuda, debug=False)
 
@@ -154,19 +154,169 @@ def buildBVH(meshs):
 ###################################################
 
 
-def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
+# def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
+#     fp = open(filename, 'r')
+#     fl = fp.readlines()
+#     verts = [[]]
+#     verts_t = [[]]
+#     ans = []
+#     for s in fl:
+#         a = s.split()
+#         if len(a) > 0:
+#             if a[0] == 'v':
+#                 verts.append(np.array([float(a[1]), float(a[2]), float(a[3])]))
+#             elif a[0] == 'vt':
+#                 verts_t.append(np.array([float(a[1]), float(a[2])]))
+#             elif a[0] == 'f':
+#                 b = a[1:]
+#                 b = [i.split('/') for i in b]
+#                 if len(b)==3:
+#                     ans.append(
+#                         [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
+#                         verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         material_id])
+#                 elif len(b)==4:
+#                     ans.append(
+#                         [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
+#                         verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         material_id])
+#                     ans.append(
+#                         [verts[int(b[2][0])]*scale+offset, verts[int(b[3][0])]*scale+offset, verts[int(b[0][0])]*scale+offset,
+#                         verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         verts_t[int(b[3][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+#                         material_id])
+#     return ans
+
+
+##############################################################
+##############################################################
+##############################################################
+
+# Textures
+
+TEX_MEM_SIZE = 1048576 * 8
+tex_mem_used = [0]
+tex_mem = np.array([[0, 0, 0] for i in range(TEX_MEM_SIZE)], dtype=np.float32)
+
+
+def texAlloc(tex_mem, im_filename, used_):
+    used = used_[0]
+    im = plt.imread(im_filename)
+    im = np.array(im, dtype=np.float32)
+    if np.max(im) > 1.0:
+        im /= 255.0
+    if len(im.shape) == 2:
+        im = np.tile(np.expand_dims(im, 2), (1, 1, 3))
+    sz = im.shape[0]*im.shape[1]
+    tex_mem[used: used+sz] = im.reshape((-1, 3))
+    used += sz
+    used_[0] = used
+    return used-sz, im.shape[0], im.shape[1]
+
+
+textures_filename = []
+
+# Material
+
+material_attr_vec = [
+    [[1,1,1], [0,0,0], [0,0,0], [0,0,0]],
+    [[0.1,0.1,0.1], [0.5,0.5,0.5], [0,0,0], [1,0,0]]
+]
+
+material_attr_int = [
+    [0,-1],
+    [1,-1]
+]
+
+material_dict = {
+    "light": 0,
+    "default": 1
+}
+
+mtl_file_memento = []
+
+
+# Ai: [illum model, tex1, tex2, ...]
+# Av For Blinn-Phong: [Ka, Kd, Ks, [Ns, 0, 0]]
+
+
+def readMaterial(filename):
+    (filepath,_) = os.path.split(filename)
+    if filename in mtl_file_memento:
+        return
+    mtl_file_memento.append(filename)
+    fp = open(filename, 'r')
+    fl = fp.readlines()
+    mtl_vec = []
+    mtl_int = []
+    mtl_id = -1
+    for s in fl:
+        a = s.split()
+        if len(a)>0:
+            if a[0] == 'newmtl':
+                if mtl_vec != []:
+                    material_attr_vec.append(mtl_vec)
+                    material_attr_int.append(mtl_int)
+                mtl_vec=[[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+                mtl_int=[1,-1]
+                mtl_name = filename + "::" + a[1]
+                mtl_id=len(material_attr_vec)
+                material_dict[mtl_name] = mtl_id
+            elif a[0] == 'Ka':
+                mtl_vec[0]=list(map(float,a[1:4]))
+            elif a[0] == 'Kd':
+                mtl_vec[1]=list(map(float,a[1:4]))
+            elif a[0] == 'Ks':
+                mtl_vec[2]=list(map(float,a[1:4]))
+            elif a[0] == 'Ns':
+                mtl_vec[3][0]=float(a[1])
+            elif a[0] == 'map_Kd':
+                a[1] = filepath + '/' + a[1]
+                if a[1] not in textures_filename: textures_filename.append(a[1])
+                mtl_int[1]=textures_filename.index(a[1])
+    if mtl_vec != []:
+        material_attr_vec.append(mtl_vec)
+        material_attr_int.append(mtl_int)
+
+
+def readObject(filename, offset=[0, 0, 0], scale=1, forcing_mtl = -1):
+    (filepath,_)  = os.path.split(filename)
     fp = open(filename, 'r')
     fl = fp.readlines()
     verts = [[]]
     verts_t = [[]]
     ans = []
+    mtl_filename = ""
+    mtl_id = 1
+    if forcing_mtl>=0: mtl_id = forcing_mtl
     for s in fl:
         a = s.split()
         if len(a) > 0:
-            if a[0] == 'v':
+            if a[0]=='mtllib':
+                mtl_filename = filepath + '/' + a[1]
+                readMaterial(mtl_filename)
+            elif a[0]=='usemtl':
+                mtl_name = mtl_filename+"::"+a[1]
+                mtl_id = material_dict[mtl_name]
+                if forcing_mtl>=0: mtl_id = forcing_mtl
+            elif a[0] == 'v':
                 verts.append(np.array([float(a[1]), float(a[2]), float(a[3])]))
             elif a[0] == 'vt':
                 verts_t.append(np.array([float(a[1]), float(a[2])]))
+            # elif a[0] == 'f':
+            #     b = a[1:]
+            #     b = [i.split('/') for i in b]
+            #     ans.append(
+            #         [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
+            #          verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
+            #          verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
+            #          verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
+            #          mtl_id])
             elif a[0] == 'f':
                 b = a[1:]
                 b = [i.split('/') for i in b]
@@ -176,71 +326,49 @@ def readObject(filename, material_id, offset=[0, 0, 0], scale=1):
                         verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
                         verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
                         verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                        material_id])
+                        mtl_id])
                 elif len(b)==4:
                     ans.append(
                         [verts[int(b[0][0])]*scale+offset, verts[int(b[1][0])]*scale+offset, verts[int(b[2][0])]*scale+offset,
                         verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
                         verts_t[int(b[1][1])] if len(verts_t) > 1 else [0.0, 0.0],
                         verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                        material_id])
+                        mtl_id])
                     ans.append(
                         [verts[int(b[2][0])]*scale+offset, verts[int(b[3][0])]*scale+offset, verts[int(b[0][0])]*scale+offset,
                         verts_t[int(b[2][1])] if len(verts_t) > 1 else [0.0, 0.0],
                         verts_t[int(b[3][1])] if len(verts_t) > 1 else [0.0, 0.0],
                         verts_t[int(b[0][1])] if len(verts_t) > 1 else [0.0, 0.0],
-                        material_id])
+                        mtl_id])
     return ans
 
 
-##############################################################
-##############################################################
-##############################################################
+scene = []
+scene += readObject('assets/sponza/sponza.obj',  offset=[0, 0, 0], scale=1)
+scene += readObject('assets/test.obj', offset=[0, 10, 0], scale=3, forcing_mtl=0)
+# scene += readObject('assets/spot.obj', offset=[0, 0, 0], scale=1)
+# scene += readObject('assets/cube.obj', offset=[0, -20, 0], scale=10)
+# scene += readObject('assets/cube.obj', offset=[-20, 0, 0], scale=10)
+# scene += readObject('assets/cube.obj', offset=[0, 0, -20], scale=10)
+# scene += readObject('assets/cube.obj', offset=[0, 20, 0], scale=10)
+# scene += readObject('assets/test.obj', offset=[0, 9.9, 0], scale=5, forcing_mtl=0)
+# scene += readObject('assets/cube.obj', offset=[20, 0, 0], scale=10)
+# scene += readObject('assets/cube.obj', offset=[0, 0, 20], scale=10)
+# scene += readObject('assets/rock.obj', offset=[0, 0, 0], scale=1)
 
-
-TEX_MEM_SIZE = 1048576 * 4
-tex_mem_used = [0]
-tex_mem = np.array([[0, 0, 0] for i in range(TEX_MEM_SIZE)], dtype=np.float32)
-
-
-def texAlloc(tex_mem, im_filename, used_):
-    used = used_[0]
-    im = plt.imread(im_filename)
-    im = np.array(im)
-    if len(im.shape) == 2:
-        im = np.tile(np.expand_dims(im, 2), (1, 1, 3))
-    sz = im.shape[0]*im.shape[1]
-    tex_mem[used: used+sz] = im.reshape((-1, 3)) / 255.0
-    used += sz
-    used_[0] = used
-    return used-sz, im.shape[0], im.shape[1]
-
-
-textures_filename = [
-    "assets/ground.jfif"
-]
-
-N_TEXTURE = len(textures_filename)
-
-textures_desc = [texAlloc(tex_mem, i, tex_mem_used) for i in textures_filename]
-
-tex_mem_ti = ti.Vector.field(3, ti.f32, (TEX_MEM_SIZE))
-tex_desc_ti = ti.Vector.field(3, ti.i32, (N_TEXTURE))
-tex_mem_ti.from_numpy(tex_mem)
-tex_desc_ti.from_numpy(np.array(textures_desc))
 
 
 @ti.func
 def getTexPixel(tex_id, x, y):
     # * x,y must be integer
-    tex_addr = tex_desc_ti[tex_id][0]
-    h = tex_desc_ti[tex_id][1]
-    w = tex_desc_ti[tex_id][2]
+    tex_addr = tex_desc_dev[tex_id][0]
+    h = tex_desc_dev[tex_id][1]
+    w = tex_desc_dev[tex_id][2]
     x = min(x, w-1)
     x = max(x, 0)
     y = min(y, h-1)
     y = max(y, 0)
-    return tex_mem_ti[tex_addr+w*y+x]
+    return tex_mem_dev[tex_addr+w*y+x]
 
 
 @ti.func
@@ -258,48 +386,49 @@ def getTexPixelBI(tex_id, x, y):
 def getTexColorBI(tex_id, u, v):
     ans = ti.Vector([1., 1., 1.])
     if tex_id >= 0:
-        h = tex_desc_ti[tex_id][1]
-        w = tex_desc_ti[tex_id][2]
+        h = tex_desc_dev[tex_id][1]
+        w = tex_desc_dev[tex_id][2]
         ans = getTexPixelBI(tex_id, u*w, (1-v)*h)
     return ans
 
 
-scene = []
-scene += readObject('assets/sponza/sponza.obj', 1, offset=[0, 0, 0], scale=1)
-scene += readObject('assets/test.obj', 0, offset=[0, 50, 0], scale=5)
+# Commit Texture
 
-scene_material_id = [i[6] for i in scene]
-scene_uv = [i[3:6] for i in scene]
-scene = [i[:3] for i in scene]
-matattrs = [
-    [[0, 0, 0], [100, 100, 100], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 3.9], [0.8, 0.8, 0.8], [0, 0, 0], [0, 0, 0]],
-    [[2, 0, 0], [0.8, 0.8, 1.0], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 3.9], [0.8, 0.2, 0.3], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 3.9], [0.3, 0.2, 0.8], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.3, 0.3], [0.6, 0.5, 0.2], [0, 0, 0], [0, 0, 0]],
-    [[1, 0.9, 0.2], [0.6 * 2, 0.5 * 2, 0.2 * 2], [0, 0, 0], [0, 0, 0]],
-]
+N_TEXTURE = len(textures_filename)
 
-matattri = [
-    [-1],
-    [0],
-    [-1],
-    [-1],
-    [-1],
-    [-1],
-    [-1],
-]
+textures_desc = [texAlloc(tex_mem, i, tex_mem_used) for i in textures_filename]
 
+tex_mem_dev = ti.Vector.field(3, ti.f32, (TEX_MEM_SIZE))
+tex_desc_dev = ti.Vector.field(3, ti.i32, (N_TEXTURE))
+tex_mem_dev.from_numpy(tex_mem)
+tex_desc_dev.from_numpy(np.array(textures_desc))
+
+
+
+scene_vertices = np.array([i[:3] for i in scene])
+scene_uvcoords = np.array([i[3:6] for i in scene])
+scene_material = np.array([i[6] for i in scene])
+
+scene_uv = scene_uvcoords
+scene_material_id = scene_material
+scene = scene_vertices
+
+# Commit Scene
 
 mesh_desc = np.array(scene)
 mesh_uv_desc = np.array(scene_uv)
-print(mesh_uv_desc.shape)
 mesh_material_desc = np.array(scene_material_id)
-matattrs_np = np.array(matattrs, dtype=np.float32)
-matattri_np = np.array(matattri, dtype=np.float32)
+
+
+N_MATERIALS = len(material_attr_int)
+material_attr_vec_dev = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
+material_attr_vec_dev.from_numpy(np.array(material_attr_vec, np.float32))
+material_attr_int_dev = ti.field(ti.i32, (N_MATERIALS, 2))
+material_attr_int_dev.from_numpy(np.array(material_attr_int, np.int32))
+
+
 light_tids = [(i, norm(np.cross(mesh_desc[i][1]-mesh_desc[i][0], mesh_desc[i][2]-mesh_desc[i][0])))
-              for i in range(len(scene)) if matattrs[scene_material_id[i]][0][0] in [0]]  # Emitting material ids here
+              for i in range(len(scene)) if material_attr_int[scene_material_id[i]][0] in [0]]  
 sum_light_area = sum(i[1] for i in light_tids)
 light_tids = [(i[0], i[1]/sum_light_area) for i in light_tids]
 light_sampler_tid = np.array([i[0] for i in light_tids])
@@ -310,18 +439,17 @@ if len(light_sampler_cdf) > 0:
 N_LIGHT_TRIANGLES = len(light_sampler_cdf)
 bvh_desc = buildBVH(mesh_desc)
 
+
+
 N_TRIANGLES = len(mesh_desc)
 IMG_HEIGHT = IMG_WIDTH = 256
 WIDTH_DIV = 4
 CLIP_N = CLIP_R = CLIP_H = 0.1
-N_MATERIALS = len(matattri)
 N_BVH_NODES = bvh_desc[0]
 
 mesh_vertices = ti.Vector.field(3, ti.f32, (N_TRIANGLES, 3))
 mesh_uvcoords = ti.Vector.field(2, ti.f32, (N_TRIANGLES, 3))
 mesh_material_id = ti.field(ti.i32, (N_TRIANGLES))
-material_attributes = ti.Vector.field(3, ti.f32, (N_MATERIALS, 4))
-material_exattr = ti.field(ti.i32, (N_MATERIALS, 1))
 
 img = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))       # original
 img_acc = ti.Vector.field(3, ti.f32, (IMG_HEIGHT, IMG_WIDTH))  # accumulated
@@ -348,8 +476,7 @@ bvh_int_cnt = ti.field(ti.f32, (4))
 mesh_vertices.from_numpy(mesh_desc)
 mesh_uvcoords.from_numpy(mesh_uv_desc)
 mesh_material_id.from_numpy(mesh_material_desc)
-material_attributes.from_numpy(matattrs_np)
-material_exattr.from_numpy(matattri_np)
+
 cam_pos .from_numpy(np.array([0.0, 0.0, 5.0]))
 cam_gaze .from_numpy(np.array([0., 0., -1]))
 cam_top .from_numpy(np.array([0., 1, 0]))
@@ -464,15 +591,6 @@ def getIntersection(orig, dir, _id):
         if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
             ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, bvhim_result[_id, i]
 
-    #################################################################################
-
-    # for i in range(mesh_vertices.shape[0]):
-    #     t, b1, b2 = checkIntersect(orig, dir, i)
-    #     if t > 0 and ans_t - t > 1e-3 and b1 > 0 and b2 > 0 and b1 + b2 < 1:
-    #         ans_t, ans_b1, ans_b2, ans_obj_id = t, b1, b2, i
-
-    #################################################################################
-
     return ans_t, ans_b1, ans_b2, ans_obj_id
 
 
@@ -573,7 +691,8 @@ def smith_g(a, i, o, n):
 def microfacet_brdf(ad, ag, i, o, n):
     ni = n.dot(i) + 1e-6
     no = n.dot(o) + 1e-6
-    return ggx_d(ad, i, o, n) * smith_g(ag, i, o, n) * 1.0 / 4 / ni / no
+    # return ggx_d(ad, i, o, n) * smith_g(ag, i, o, n) * 1.0 / 4 / ni / no
+    return 1.0 / 3.14159
 
 
 @ti.kernel
@@ -613,21 +732,20 @@ def render():
                         u = uv[0]
                         v = uv[1]
                         material_id = mesh_material_id[triangle_id]
-                        material_type_id = material_attributes[material_id, 0][0]
+                        material_type_id = material_attr_int_dev[material_id, 0]
                         normal = (p1-p0).cross(p2-p0).normalized()
-                        tex_id = material_exattr[material_id, 0]
-                        tex_color = getTexColorBI(tex_id, u, v)
+                        tex_id = material_attr_int_dev[material_id, 1]
+                        tex_color = getTexColorBI(tex_id, u, v) if tex_id >=0 else material_attr_vec_dev[material_id, 1]
                         if normal.dot(-dir) > 0:
                             # Implement different materials here
                             if material_type_id == 0:
-                                # Area light
                                 if light_source_visible:  # Add direct contribution of light source
-                                    ans += material_attributes[material_id,
-                                                               1] * coef * normal.dot(-dir)
+                                    ans += material_attr_vec_dev[material_id,
+                                                               0] * coef * normal.dot(-dir) 
                                 break
                             elif material_type_id == 1:
-                                # Microfacet (GGX_D, SMITH_G, no Fresnel)
-
+                                # * lambert only currently 
+                                
                                 light_tid, light_pos = sample_light()
                                 light_p0 = mesh_vertices[light_tid, 0]
                                 light_p1 = mesh_vertices[light_tid, 1]
@@ -635,43 +753,22 @@ def render():
                                 light_normal = (
                                     light_p1-light_p0).cross(light_p2-light_p0).normalized()
 
-                                brdf_1 = material_attributes[material_id, 1] / 3.14159 * microfacet_brdf(
-                                    material_attributes[material_id, 0][1],
-                                    material_attributes[material_id, 0][2],
-                                    (light_pos-hit_pos).normalized(),
-                                    -dir,
-                                    normal
-                                ) * tex_color
+                                brdf_1 = tex_color / 3.14159
 
                                 if checkVisibility(hit_pos, light_pos, thread_id) and light_normal.dot(hit_pos-light_pos) > 0:
-                                    ans += coef * brdf_1 * normal.dot((light_pos-hit_pos).normalized()) * material_attributes[mesh_material_id[light_tid], 1] * \
+                                    ans += coef * brdf_1 * normal.dot((light_pos-hit_pos).normalized()) * material_attr_vec_dev[mesh_material_id[light_tid], 0] * \
                                         light_normal.dot(
-                                            (hit_pos-light_pos).normalized()) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area
+                                            (hit_pos-light_pos).normalized()) / (hit_pos-light_pos).dot(hit_pos-light_pos) * sum_light_area 
 
                                 light_source_visible = False
 
                                 wi = sample_brdf(normal)
 
-                                brdf = material_attributes[material_id, 1] * microfacet_brdf(
-                                    material_attributes[material_id, 0][1],
-                                    material_attributes[material_id, 0][2],
-                                    wi,
-                                    -dir,
-                                    normal
-                                ) * tex_color
+                                brdf = tex_color / 3.14159
 
                                 coef *= brdf * 3.14159
                                 orig = hit_pos + wi * 1e-4
                                 dir = wi
-                            # elif material_type_id == 2:
-                            #     # Pure specular
-                            #     brdf = material_attributes[material_id, 1]
-                            #     wi = 2*normal.dot(-dir)*normal+dir
-                            #     wi = wi.normalized()
-                            #     coef *= brdf
-                            #     orig = hit_pos + wi * 1e-4
-                            #     dir = wi
-                            #     light_source_visible = True
                         else:
                             break
                     else:
